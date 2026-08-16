@@ -8,18 +8,20 @@
 <style>
 :root{
   color-scheme:only light;
-  --paper:#EFF2F1;--card:#FFFFFF;--ink:#101E2C;--ink-mid:#465561;--ink-soft:#6B7A85;
-  --rule:#C9D2CF;--shu:#B93B26;
+  --paper:#E9EFF7;--card:#FFFFFF;--ink:#12294C;--ink-mid:#3F5A80;--ink-soft:#6C82A3;
+  --rule:#C2D0E4;--shu:#B93B26;
   --sans:"Meiryo UI","Meiryo","Hiragino Sans","Yu Gothic UI","Yu Gothic",sans-serif;
   --mono:ui-monospace,"SFMono-Regular",Menlo,monospace;
 }
 html[data-theme="dark"]{
   color-scheme:only dark;
-  --paper:#11161A;--card:#1B2227;--ink:#F2F6F5;--ink-mid:#C6D1D6;--ink-soft:#9AA7AE;
-  --rule:#3B454C;--shu:#FF8468;
+  --paper:#0D1626;--card:#172336;--ink:#EAF1FB;--ink-mid:#B3C4DC;--ink-soft:#8698B4;
+  --rule:#2E3F5A;--shu:#FF8468;
 }
-html[data-theme="dark"] .scrim{background:rgba(0,0,0,.55)}
-html[data-theme="dark"] .btn-solid{background-color:var(--ink);color:#11161A}
+html[data-theme="dark"] .scrim{background:rgba(3,8,18,.6)}
+html[data-theme="dark"] .btn-solid{background-color:#2E5C9A;color:#F2F7FF;border-color:#2E5C9A}
+html[data-theme="dark"] .btn-solid:hover{background-color:#3A6CB0}
+html[data-theme="dark"] .notes-fab{background-color:#2E5C9A;color:#F2F7FF}
 *{box-sizing:border-box}
 html,body{margin:0;padding:0;background-color:var(--paper)}
 html{min-height:100%}
@@ -32,7 +34,7 @@ input::placeholder,textarea::placeholder{color:var(--ink-soft);-webkit-text-fill
 
 .top{position:sticky;top:0;z-index:30;background-color:var(--paper);border-bottom:1px solid var(--rule);
      padding:10px 16px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
-.brand{font-weight:700;font-size:18px;letter-spacing:.12em;margin:0}
+.brand{font-weight:700;font-size:18px;letter-spacing:.08em;margin:0}
 .brand .dot{color:var(--shu)}
 .spacer{flex:1}
 .saved{font-family:var(--mono);font-size:12px;color:var(--ink-mid);letter-spacing:.03em}
@@ -55,7 +57,7 @@ input::placeholder,textarea::placeholder{color:var(--ink-soft);-webkit-text-fill
 main{max-width:900px;margin:0 auto;padding:18px 16px 70px}
 
 .list-head{display:flex;align-items:baseline;gap:10px;margin:6px 0 18px}
-.list-head h2{font-size:14px;font-weight:700;letter-spacing:.1em;margin:0}
+.list-head h2{font-size:15px;font-weight:700;letter-spacing:.06em;margin:0}
 .count{font-family:var(--mono);font-size:12px;color:var(--ink-soft)}
 .card{background-color:var(--card);border:1px solid var(--rule);border-radius:3px;padding:14px 16px;
       margin-bottom:10px;cursor:pointer;display:flex;align-items:flex-start;gap:12px;transition:border-color .15s}
@@ -81,7 +83,7 @@ main{max-width:900px;margin:0 auto;padding:18px 16px 70px}
 .stats{display:flex;flex-wrap:wrap;gap:18px;margin-top:12px;font-size:13px;color:var(--ink-mid)}
 .stats b{color:var(--ink);font-weight:700;font-size:14px;font-family:var(--mono)}
 
-.scrim{position:fixed;inset:0;background:rgba(22,40,60,.28);z-index:40;opacity:0;pointer-events:none;transition:opacity .2s}
+.scrim{position:fixed;inset:0;background:rgba(12,30,60,.32);z-index:40;opacity:0;pointer-events:none;transition:opacity .2s}
 .scrim.open{opacity:1;pointer-events:auto}
 .drawer{position:fixed;top:0;right:0;height:100%;width:min(440px,95vw);background-color:var(--paper);
       border-left:1px solid var(--rule);z-index:50;transform:translateX(100%);transition:transform .22s ease;
@@ -89,7 +91,7 @@ main{max-width:900px;margin:0 auto;padding:18px 16px 70px}
 .drawer.open{transform:none}
 @media (prefers-reduced-motion:reduce){.drawer,.scrim{transition:none}}
 .drawer header{display:flex;align-items:center;gap:8px;padding:13px 16px;border-bottom:1px solid var(--rule)}
-.drawer h2{font-size:15px;font-weight:700;letter-spacing:.08em;margin:0}
+.drawer h2{font-size:16px;font-weight:700;letter-spacing:.04em;margin:0}
 .drawer .close{border:1px solid var(--rule);background:none;color:var(--ink);border-radius:2px;
       font-size:13px;font-weight:700;padding:8px 16px;line-height:1.5;min-height:40px}
 .drawer .close:hover{background-color:var(--rule)}
@@ -128,7 +130,7 @@ main{max-width:900px;margin:0 auto;padding:18px 16px 70px}
 .blank{font-size:13.5px;color:var(--ink-mid);line-height:1.8}
 
 .bk-sec{margin-bottom:26px}
-.bk-sec h3{font-size:12px;font-weight:700;letter-spacing:.1em;margin:0 0 6px}
+.bk-sec h3{font-size:13px;font-weight:700;letter-spacing:.04em;margin:0 0 6px}
 .bk-sec p{font-size:12.5px;color:var(--ink-mid);margin:0 0 10px;line-height:1.7}
 .bk-row{display:flex;gap:8px;flex-wrap:wrap}
 #pasteBox,#cfgBox{width:100%;background-color:var(--card);border:1px solid var(--rule);border-radius:2px;
@@ -139,7 +141,7 @@ main{max-width:900px;margin:0 auto;padding:18px 16px 70px}
 .hidden-input{display:none}
 
 .ask-wrap{position:fixed;inset:0;z-index:60;display:none;align-items:center;justify-content:center;padding:20px;
-      background:rgba(10,16,20,.5)}
+      background:rgba(12,30,60,.5)}
 .ask-wrap.open{display:flex}
 .ask{background-color:var(--card);border:1px solid var(--rule);border-radius:4px;padding:20px;max-width:400px;width:100%}
 .ask p{margin:0 0 16px;font-size:14px;line-height:1.8;color:var(--ink)}
@@ -149,9 +151,10 @@ main{max-width:900px;margin:0 auto;padding:18px 16px 70px}
 /* 広い画面ではネタ帳を右に常時表示 */
 .shell{display:block}
 .notes-fab{position:fixed;right:16px;bottom:18px;z-index:35;border:none;border-radius:24px;
-   background-color:var(--ink);color:var(--paper);font-size:14px;font-weight:700;
-   padding:12px 20px;box-shadow:0 3px 12px rgba(0,0,0,.25)}
-.notes-fab .n{font-family:var(--mono);font-size:12px;opacity:.75;margin-left:6px}
+   background-color:#1D3F6E;color:#F2F7FF;font-size:14px;font-weight:700;
+   padding:12px 20px;box-shadow:0 3px 14px rgba(10,26,52,.35)}
+.notes-fab .n{font-family:var(--mono);font-size:12px;opacity:.85;margin-left:6px;
+   background:rgba(255,255,255,.18);border-radius:10px;padding:1px 7px}
 @media(max-width:1099px){
   #notesBtn,#notesBtn2{display:none}
 }
@@ -176,13 +179,13 @@ main{max-width:900px;margin:0 auto;padding:18px 16px 70px}
 <body>
 
 <header class="top">
-  <h1 class="brand">下書き帳<span class="dot">.</span></h1>
+  <h1 class="brand">✍️ 下書き帳</h1>
   <span class="spacer"></span>
   <span class="saved" id="savedNote"></span>
   <button class="theme-toggle" id="themeBtn" title="表示を切り替える">◐</button>
   <button class="btn btn-quiet btn-sm" id="authBtn" hidden>ログイン</button>
-  <button class="btn btn-solid btn-sm" id="notesBtn">ネタ帳</button>
-  <button class="btn btn-quiet btn-sm" id="backBtn" hidden>一覧へ</button>
+  <button class="btn btn-solid btn-sm" id="notesBtn">💡 ネタ帳</button>
+  <button class="btn btn-quiet btn-sm" id="backBtn" hidden>📚 一覧へ</button>
 </header>
 
 <div class="warnbar" id="warnBar"></div>
@@ -191,13 +194,13 @@ main{max-width:900px;margin:0 auto;padding:18px 16px 70px}
 <main>
   <section id="viewList">
     <div class="list-head">
-      <h2>記事</h2><span class="count" id="listCount"></span>
+      <h2>📚 記事</h2><span class="count" id="listCount"></span>
       <span class="spacer"></span>
-      <button class="btn btn-solid" id="newBtn">新しい記事</button>
+      <button class="btn btn-solid" id="newBtn">✏️ 新しい記事</button>
     </div>
     <div id="cards"></div>
     <div class="list-foot">
-      <button class="btn btn-quiet btn-sm" id="backupBtn">バックアップ・復元</button>
+      <button class="btn btn-quiet btn-sm" id="backupBtn">💾 バックアップ・復元</button>
       <span class="note-txt">記事とネタ帳をまとめて書き出し／読み込み</span>
     </div>
   </section>
@@ -205,14 +208,14 @@ main{max-width:900px;margin:0 auto;padding:18px 16px 70px}
   <section id="viewEdit" hidden>
     <input type="text" class="title-input" id="titleInput" placeholder="無題の記事">
     <div class="bar">
-      <button class="btn btn-quiet btn-sm" id="copyBtn">そのままコピー</button>
-      <button class="btn btn-quiet btn-sm" id="copyHtmlBtn">HTMLでコピー</button>
-      <button class="btn btn-quiet btn-sm" id="notesBtn2">ネタ帳を開く</button>
+      <button class="btn btn-quiet btn-sm" id="copyBtn">📋 そのままコピー</button>
+      <button class="btn btn-quiet btn-sm" id="copyHtmlBtn">🌐 HTMLでコピー</button>
+      <button class="btn btn-quiet btn-sm" id="notesBtn2">💡 ネタ帳を開く</button>
     </div>
     <textarea id="bodyText" placeholder="ここに書く。&#10;&#10;## で見出し、### で小見出し&#10;- で箇条書き、**太字**、[文字](URL) でリンク"></textarea>
     <div class="stats" id="bodyStats"></div>
     <div class="bar" style="margin-top:18px">
-      <button class="btn btn-solid" id="doneBtn">保存して一覧に戻る</button>
+      <button class="btn btn-solid" id="doneBtn">✅ 保存して一覧に戻る</button>
     </div>
   </section>
 </main>
@@ -228,38 +231,38 @@ main{max-width:900px;margin:0 auto;padding:18px 16px 70px}
 </div>
 
 <aside class="drawer" id="notesDrawer" aria-hidden="true">
-  <header><h2>ネタ帳</h2><span class="spacer"></span><button class="close" data-close>閉じる</button></header>
+  <header><h2>💡 ネタ帳</h2><span class="spacer"></span><button class="close" data-close>閉じる</button></header>
   <div class="body">
     <p class="lead">記事をまたいで残る置き場。</p>
     <div class="addrow">
       <textarea id="noteInput" placeholder="ネタを書く"></textarea>
-      <button class="btn btn-sm btn-solid" id="noteAdd">足す</button>
+      <button class="btn btn-sm btn-solid" id="noteAdd">＋ 足す</button>
     </div>
     <p class="addhint">Shift+Enterで改行</p>
     <ul class="items" id="noteList"></ul>
     <div class="bar" style="margin-top:6px">
-      <button class="btn btn-solid" id="notesDoneBtn">保存して閉じる</button>
+      <button class="btn btn-solid" id="notesDoneBtn">✅ 保存して閉じる</button>
     </div>
   </div>
 </aside>
 </div>
 
-<button class="notes-fab" id="notesFab">ネタ帳<span class="n" id="fabCount"></span></button>
+<button class="notes-fab" id="notesFab">💡 ネタ帳<span class="n" id="fabCount"></span></button>
 <div class="scrim" id="scrim"></div>
 
 <aside class="drawer" id="bkDrawer" aria-hidden="true">
-  <header><h2>バックアップ・復元</h2><span class="spacer"></span><button class="close" data-close>閉じる</button></header>
+  <header><h2>💾 バックアップ・復元</h2><span class="spacer"></span><button class="close" data-close>閉じる</button></header>
   <div class="body">
     <div class="bk-sec">
-      <h3>書き出す</h3>
+      <h3>📤 書き出す</h3>
       <p>記事とネタ帳をまとめた1つのファイルにします。</p>
       <div class="bk-row">
-        <button class="btn btn-sm btn-solid" id="dlBtn">ファイルに保存</button>
-        <button class="btn btn-sm btn-quiet" id="cpBkBtn">中身をコピー</button>
+        <button class="btn btn-sm btn-solid" id="dlBtn">📁 ファイルに保存</button>
+        <button class="btn btn-sm btn-quiet" id="cpBkBtn">📋 中身をコピー</button>
       </div>
     </div>
     <div class="bk-sec">
-      <h3>読み込む</h3>
+      <h3>📥 読み込む</h3>
       <p>今の記事とネタ帳は、読み込んだ内容にすべて置き換わります。</p>
       <div class="bk-row" style="margin-bottom:10px">
         <button class="btn btn-sm btn-quiet" id="fileBtn">ファイルを選ぶ</button>
@@ -270,7 +273,7 @@ main{max-width:900px;margin:0 auto;padding:18px 16px 70px}
       <div class="bk-msg" id="bkMsg"></div>
     </div>
     <div class="bk-sec">
-      <h3>保存先</h3>
+      <h3>☁️ 保存先</h3>
       <p id="cloudStatus">確認中…</p>
       <textarea id="cfgBox" placeholder="Firebaseの firebaseConfig をまるごと貼り付け（apiKey や databaseURL を含む部分）"></textarea>
       <div class="bk-row">
@@ -414,7 +417,7 @@ async function pull(){
       notes=Array.isArray(d.notes)?d.notes:[];
       if(d.theme) applyTheme(d.theme);
       migrate(); renderList(); renderNotes();
-      $('savedNote').textContent='読み込み済み';
+      $('savedNote').textContent='✓ 読み込み済み';
     }else if(articles.length||notes.length){
       save();
     }
@@ -430,7 +433,7 @@ async function save(){
   try{
     await cloud.fns.set(cloud.ref,{articles,notes,theme,updated:Date.now()});
     const t=new Date();
-    $('savedNote').textContent='保存 '+String(t.getHours()).padStart(2,'0')+':'+String(t.getMinutes()).padStart(2,'0');
+    $('savedNote').textContent='✓ 保存 '+String(t.getHours()).padStart(2,'0')+':'+String(t.getMinutes()).padStart(2,'0');
   }catch(e){
     $('savedNote').textContent='保存できません';
     warn('保存できませんでした（'+(e.message||e)+'）');
@@ -460,7 +463,7 @@ function migrate(){
 const fmt=ts=>{const d=new Date(ts);return `${d.getFullYear()}.${String(d.getMonth()+1).padStart(2,'0')}.${String(d.getDate()).padStart(2,'0')}`;};
 function renderList(){
   $('listCount').textContent=articles.length?articles.length+'件':'';
-  if(!articles.length){ $('cards').innerHTML='<div class="empty"><p>まだ記事がありません。</p></div>'; return; }
+  if(!articles.length){ $('cards').innerHTML='<div class="empty"><p>📄 まだ記事がありません。<br>「✏️ 新しい記事」から始められます。</p></div>'; return; }
   $('cards').innerHTML=[...articles].sort((a,b)=>b.updated-a.updated).map(a=>`
     <div class="card" data-id="${a.id}">
       <div>
@@ -468,7 +471,7 @@ function renderList(){
         <div class="meta">${fmt(a.updated)}　${chars(a.body)}字</div>
         ${a.body.trim()?`<div class="excerpt">${esc(a.body.trim().slice(0,90))}</div>`:''}
       </div>
-      <button class="del" data-del="${a.id}">削除</button>
+      <button class="del" data-del="${a.id}">🗑 削除</button>
     </div>`).join('');
 }
 $('cards').addEventListener('click',async e=>{
@@ -510,13 +513,13 @@ function goList(){
 $('doneBtn').addEventListener('click',async()=>{
   const b=$('doneBtn'); b.textContent='保存中…';
   await flushSave();
-  b.textContent='保存して一覧に戻る';
+  b.textContent='✅ 保存して一覧に戻る';
   goList();
 });
 $('notesDoneBtn').addEventListener('click',async()=>{
   const b=$('notesDoneBtn'); b.textContent='保存中…';
   await flushSave();
-  b.textContent='保存して閉じる';
+  b.textContent='✅ 保存して閉じる';
   closeDrawer();
 });
 $('backBtn').addEventListener('click',()=>{
@@ -537,7 +540,7 @@ async function copyText(text,btn,label){
   catch(e){ btn.textContent='コピーできませんでした'; }
   setTimeout(()=>btn.textContent=label,1500);
 }
-$('copyBtn').addEventListener('click',()=>copyText(cur().body,$('copyBtn'),'そのままコピー'));
+$('copyBtn').addEventListener('click',()=>copyText(cur().body,$('copyBtn'),'📋 そのままコピー'));
 
 /* ===== WordPress向けHTML変換 ===== */
 function inline(t){
@@ -588,7 +591,7 @@ function toHtml(src){
 }
 $('copyHtmlBtn').addEventListener('click',()=>{
   const btn=$('copyHtmlBtn'), html=toHtml(cur().body);
-  const done=t=>{ btn.textContent=t; setTimeout(()=>btn.textContent='HTMLでコピー',1600); };
+  const done=t=>{ btn.textContent=t; setTimeout(()=>btn.textContent='🌐 HTMLでコピー',1600); };
   try{
     const item=new ClipboardItem({
       'text/html': new Blob([html],{type:'text/html'}),
@@ -629,7 +632,7 @@ $('backupBtn').addEventListener('click',()=>{$('bkMsg').textContent='';openDrawe
 function renderNotes(){
   $('fabCount').textContent=notes.length?notes.length:'';
   if(!notes.length){
-    $('noteList').innerHTML='<li class="blank">まだ何もありません。<br>思いついた順に、まずネタだけ足しておけます。</li>';
+    $('noteList').innerHTML='<li class="blank">💭 まだ何もありません。<br>思いついた順に、まずネタだけ足しておけます。</li>';
     return;
   }
   $('noteList').innerHTML=[...notes].reverse().map(n=>{
@@ -654,7 +657,7 @@ function renderNotes(){
           </div>`).join('')}
         <div class="foot">
           <button data-cpall>まとめてコピー</button>
-          <button class="rm" data-rm>削除</button>
+          <button class="rm" data-rm>🗑 削除</button>
         </div>
       </div>
     </li>`;}).join('');
@@ -707,7 +710,7 @@ $('dlBtn').addEventListener('click',()=>{
   setTimeout(()=>URL.revokeObjectURL(url),2000);
   $('bkMsg').textContent='書き出しました：'+name;
 });
-$('cpBkBtn').addEventListener('click',()=>copyText(dump(),$('cpBkBtn'),'中身をコピー'));
+$('cpBkBtn').addEventListener('click',()=>copyText(dump(),$('cpBkBtn'),'📋 中身をコピー'));
 async function restore(text){
   let data;
   try{ data=JSON.parse(text); }catch(e){ $('bkMsg').textContent='読み取れませんでした（形式が違います）'; return; }
