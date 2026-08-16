@@ -110,6 +110,10 @@ main{max-width:900px;margin:0 auto;padding:18px 16px 70px}
 .note .caret{font-family:var(--mono);font-size:11px;color:var(--ink-soft);margin-top:4px;flex:none;transition:transform .15s}
 .note.open .caret{transform:rotate(90deg)}
 .note .txt{font-size:15px;font-weight:500;line-height:1.7;word-break:break-word;white-space:pre-wrap}
+.note .peek{font-size:12.5px;color:var(--ink-mid);line-height:1.6;margin-top:5px;
+      display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.note .peek .tag{display:inline-block;font-size:10px;font-weight:700;color:var(--paper);
+      background-color:var(--ink-mid);border-radius:2px;padding:1px 5px;margin-right:6px;vertical-align:1px}
 .note .tagline{font-size:11.5px;color:var(--ink-mid);letter-spacing:.03em;margin-top:5px;font-weight:400}
 .fields{border-top:1px solid var(--rule);padding:12px;display:none}
 .note.open .fields{display:block}
@@ -314,8 +318,8 @@ function configFromUrl(){
 }
 
 const FIELDS=[
-  {k:'memo',  label:'キラーフレーズ・論点・備考', ph:'入れたい一文、扱う論点、参照元など'},
-  {k:'think', label:'今の思考',                   ph:'いま考えていること（あとで変わってよい）'}
+  {k:'think', label:'今の思考',                   ph:'いま考えていること（あとで変わってよい）'},
+  {k:'memo',  label:'論点・キラーフレーズ・備考', ph:'扱う論点、入れたい一文、参照元など'}
 ];
 let articles=[], notes=[], curId=null, saveTimer=null, theme='light';
 const open=new Set();
@@ -629,6 +633,14 @@ $('notesFab').addEventListener('click',()=>{renderNotes();openDrawer($('notesDra
 $('backupBtn').addEventListener('click',()=>{$('bkMsg').textContent='';openDrawer($('bkDrawer'));});
 
 /* ===== ネタ帳 ===== */
+function preview(n){
+  const memo=(n.memo||'').trim(), think=(n.think||'').trim();
+  if(!memo && !think) return '<div class="tagline">記入なし</div>';
+  const rows=[];
+  if(memo) rows.push('<div class="peek"><span class="tag">論点・フレーズ</span>'+esc(memo.replace(/\s+/g,' ').slice(0,60))+(memo.length>60?'…':'')+'</div>');
+  if(think) rows.push('<div class="peek"><span class="tag">今の思考</span>'+esc(think.replace(/\s+/g,' ').slice(0,60))+(think.length>60?'…':'')+'</div>');
+  return rows.join('');
+}
 function renderNotes(){
   $('fabCount').textContent=notes.length?notes.length:'';
   if(!notes.length){
@@ -636,13 +648,12 @@ function renderNotes(){
     return;
   }
   $('noteList').innerHTML=[...notes].reverse().map(n=>{
-    const filled=FIELDS.filter(f=>n[f.k].trim()).map(f=>f.label);
     return `<li class="note ${open.has(n.id)?'open':''}" data-id="${n.id}">
       <div class="head" data-toggle>
         <span class="caret">▸</span>
         <div>
           <div class="txt">${esc(n.text)}</div>
-          <div class="tagline">${filled.length?esc(filled.join('・')):'記入なし'}</div>
+          ${preview(n)}
         </div>
       </div>
       <div class="fields">
