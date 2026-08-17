@@ -123,8 +123,18 @@ main{max-width:900px;margin:0 auto;padding:18px 16px 70px}
 .f .mini{border:1px solid var(--rule);background:none;border-radius:2px;font-size:11.5px;
       color:var(--ink-mid);padding:3px 8px;line-height:1.6}
 .f .mini:hover{background:var(--rule);color:var(--ink)}
+.f .mini.fold{border-color:var(--ink-soft)}
+.f .mini.clear{border-color:var(--shu);color:var(--shu)}
+.f .mini.clear:hover{background-color:var(--shu);color:#fff}
 .f textarea{width:100%;background-color:var(--paper);border:1px solid var(--rule);border-radius:2px;
       padding:9px 10px;font-family:var(--sans);font-size:14px;line-height:1.8;min-height:130px;resize:vertical}
+.f.closed{margin-bottom:8px}
+.addf{width:100%;text-align:left;border:1px dashed var(--rule);background:none;border-radius:2px;
+      color:var(--ink-soft);font-size:12.5px;padding:9px 10px}
+.addf:hover{color:var(--ink);border-color:var(--ink-mid)}
+.addf.filled{border-style:solid;border-color:var(--ink-mid);color:var(--ink);
+      font-weight:700;background-color:var(--paper)}
+
 .note .foot{display:flex;gap:4px;flex-wrap:wrap;align-items:center}
 .note .foot button{background:none;font-size:12px;color:var(--ink-mid);padding:4px 9px;
       border:1px solid var(--rule);border-radius:2px}
@@ -323,6 +333,9 @@ const FIELDS=[
 ];
 let articles=[], notes=[], curId=null, saveTimer=null, theme='light';
 const open=new Set();
+const openFields=new Set();
+const foldedFields=new Set();
+let pendingFocus=null;
 const $=id=>document.getElementById(id);
 const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const cur=()=>articles.find(a=>a.id===curId);
@@ -539,9 +552,27 @@ function updateStats(){
     `<span>原稿用紙 <b>${(n/400).toFixed(1)}</b> 枚</span>`+
     `<span>読了目安 <b>${Math.max(1,Math.round(n/600))}</b> 分</span>`;
 }
+function legacyCopy(text){
+  const ta=document.createElement('textarea');
+  ta.value=text;
+  ta.setAttribute('readonly','');
+  ta.style.cssText='position:fixed;top:0;left:0;opacity:0;pointer-events:none';
+  document.body.appendChild(ta);
+  ta.select(); ta.setSelectionRange(0,ta.value.length);
+  let ok=false;
+  try{ ok=document.execCommand('copy'); }catch(e){ ok=false; }
+  document.body.removeChild(ta);
+  return ok;
+}
 async function copyText(text,btn,label){
-  try{await navigator.clipboard.writeText(text); btn.textContent='コピーしました';}
-  catch(e){ btn.textContent='コピーできませんでした'; }
+  let ok=false;
+  try{
+    if(navigator.clipboard && window.isSecureContext){
+      await navigator.clipboard.writeText(text); ok=true;
+    }
+  }catch(e){ ok=false; }
+  if(!ok) ok=legacyCopy(text);
+  btn.textContent = ok ? 'コピーしました' : 'コピーできませんでした';
   setTimeout(()=>btn.textContent=label,1500);
 }
 $('copyBtn').addEventListener('click',()=>copyText(cur().body,$('copyBtn'),'📋 そのままコピー'));
@@ -637,8 +668,8 @@ function preview(n){
   const memo=(n.memo||'').trim(), think=(n.think||'').trim();
   if(!memo && !think) return '<div class="tagline">記入なし</div>';
   const rows=[];
-  if(memo) rows.push('<div class="peek"><span class="tag">論点・フレーズ</span>'+esc(memo.replace(/\s+/g,' ').slice(0,60))+(memo.length>60?'…':'')+'</div>');
   if(think) rows.push('<div class="peek"><span class="tag">今の思考</span>'+esc(think.replace(/\s+/g,' ').slice(0,60))+(think.length>60?'…':'')+'</div>');
+  if(memo) rows.push('<div class="peek"><span class="tag">論点・フレーズ</span>'+esc(memo.replace(/\s+/g,' ').slice(0,60))+(memo.length>60?'…':'')+'</div>');
   return rows.join('');
 }
 function renderNotes(){
@@ -647,6 +678,7 @@ function renderNotes(){
     $('noteList').innerHTML='<li class="blank">💭 まだ何もありません。<br>思いついた順に、まずネタだけ足しておけます。</li>';
     return;
   }
+  const focus=pendingFocus; pendingFocus=null;
   $('noteList').innerHTML=[...notes].reverse().map(n=>{
     return `<li class="note ${open.has(n.id)?'open':''}" data-id="${n.id}">
       <div class="head" data-toggle>
@@ -657,27 +689,41 @@ function renderNotes(){
         </div>
       </div>
       <div class="fields">
-        ${FIELDS.map(f=>`
+        ${FIELDS.map(f=>{
+          const val=(n[f.k]||'').trim();
+          const folded=foldedFields.has(n.id+':'+f.k);
+          const has=(val && !folded) || openFields.has(n.id+':'+f.k);
+          if(!has) return `<div class="f closed"><button class="addf ${val?'filled':''}" data-addf="${f.k}">${val?'📄':'＋'} ${f.label}</button></div>`;
+          return `
           <div class="f">
             <div class="flabel">
               <label>${f.label}</label><span class="spacer"></span>
               <button class="mini" data-cpf="${f.k}">コピー</button>
               ${curId?`<button class="mini" data-insf="${f.k}">差し込む</button>`:''}
+              <button class="mini fold" data-foldf="${f.k}" title="この欄を閉じる">閉じる</button>
+              <button class="mini clear" data-clearf="${f.k}" title="この欄の中身を消す">🗑</button>
             </div>
             <textarea data-field="${f.k}" placeholder="${f.ph}">${esc(n[f.k])}</textarea>
-          </div>`).join('')}
+          </div>`;}).join('')}
         <div class="foot">
           <button data-cpall>まとめてコピー</button>
           <button class="rm" data-rm>🗑 削除</button>
         </div>
       </div>
     </li>`;}).join('');
+  if(focus){
+    const [nid,key]=focus.split(':');
+    const li=$('noteList').querySelector(`.note[data-id="${nid}"]`);
+    const ta=li && li.querySelector(`textarea[data-field="${key}"]`);
+    if(ta) ta.focus();
+  }
 }
 function autoGrow(el){ el.style.height='76px'; el.style.height=Math.min(el.scrollHeight,240)+'px'; }
 function addNote(){
   const el=$('noteInput'), v=el.value.trim(); if(!v) return;
   const n={id:uid('n'),text:v,memo:'',think:''};
   notes.push(n); open.add(n.id); el.value=''; autoGrow(el);
+  openFields.add(n.id+':think'); pendingFocus=n.id+':think';
   renderNotes(); queueSave();
 }
 $('noteAdd').addEventListener('click',addNote);
@@ -693,6 +739,30 @@ $('noteList').addEventListener('click',e=>{
   const b=e.target.closest('button');
   if(!b){
     if(e.target.closest('[data-toggle]')){ open.has(n.id)?open.delete(n.id):open.add(n.id); renderNotes(); }
+    return;
+  }
+  if(b.dataset.clearf!==undefined){
+    const key=b.dataset.clearf;
+    const label=FIELDS.find(f=>f.k===key).label;
+    ask(`「${label}」の中身を消します。元に戻せません。`).then(ok=>{
+      if(!ok) return;
+      n[key]=''; foldedFields.add(n.id+':'+key); openFields.delete(n.id+':'+key);
+      renderNotes(); queueSave();
+    });
+    return;
+  }
+  if(b.dataset.foldf!==undefined){
+    const key=b.dataset.foldf;
+    foldedFields.add(n.id+':'+key);
+    openFields.delete(n.id+':'+key);
+    renderNotes(); queueSave();
+    return;
+  }
+  if(b.dataset.addf!==undefined){
+    foldedFields.delete(n.id+':'+b.dataset.addf);
+    openFields.add(n.id+':'+b.dataset.addf);
+    pendingFocus=n.id+':'+b.dataset.addf;
+    renderNotes();
     return;
   }
   if(b.dataset.cpf!==undefined) copyText(n[b.dataset.cpf],b,'コピー');
