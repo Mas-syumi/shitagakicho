@@ -43,7 +43,7 @@ input::placeholder,textarea::placeholder{color:var(--ink-soft);-webkit-text-fill
 
 .top{position:sticky;top:0;z-index:30;background-color:var(--paper);border-bottom:1px solid var(--rule);
      padding:10px 16px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
-.brand{font-weight:700;font-size:18px;letter-spacing:.08em;margin:0}
+.brand{font-weight:700;font-size:18px;letter-spacing:.08em;margin:0;cursor:pointer}
 .brand .dot{color:var(--shu)}
 .spacer{flex:1}
 .saved{font-family:var(--mono);font-size:12px;color:var(--ink-mid);letter-spacing:.03em}
@@ -227,7 +227,7 @@ html[data-theme="dark"] .status-toggle[data-status="published"]{border-color:#3E
 <body>
 
 <header class="top">
-  <h1 class="brand">✍️ 下書き帳</h1>
+  <h1 class="brand" id="brandBtn" title="保存して一覧に戻る">✍️ 下書き帳</h1>
   <span class="spacer"></span>
   <span class="saved" id="savedNote"></span>
   <button class="theme-toggle" id="themeBtn" title="表示を切り替える">◐</button>
@@ -623,6 +623,11 @@ $('doneBtn').addEventListener('click',async()=>{
   const b=$('doneBtn'); b.textContent='保存中…';
   await flushSave();
   b.textContent='✅ 保存して一覧に戻る';
+  goList();
+});
+$('brandBtn').addEventListener('click',async()=>{
+  if(!curId) return;
+  await flushSave();
   goList();
 });
 $('notesDoneBtn').addEventListener('click',async()=>{
