@@ -269,6 +269,7 @@ html[data-theme="dark"] .status-toggle[data-status="published"]{border-color:#3E
         <option value="title_asc">タイトル順</option>
       </select>
     </div>
+    <div class="tagbar" id="statusBar"></div>
     <div class="tagbar" id="catBar"></div>
     <div class="tagbar" id="tagBar"></div>
     <div id="cards"></div>
@@ -447,6 +448,20 @@ $('themeBtn').addEventListener('click',()=>{ applyTheme(theme==='dark'?'light':'
 /* ===== 保存先（Firebase） ===== */
 const cloud={ready:false, user:null, db:null, ref:null, fns:null};
 let pulledFor=null;
+
+/* ===== ローカルキャッシュ（オフライン対策） ===== */
+const LOCAL_KEY='shitagaki-local-v1';
+function loadLocal(){
+  try{
+    const raw=localStorage.getItem(LOCAL_KEY);
+    return raw ? JSON.parse(raw) : null;
+  }catch(e){ return null; }
+}
+function saveLocal(){
+  try{
+    localStorage.setItem(LOCAL_KEY, JSON.stringify({articles, notes, theme, updated: Date.now()}));
+  }catch(e){ /* 保存先が使えない場合は諦める（オンライン保存には影響しない） */ }
+}
 function warn(msg){
   const bar=$('warnBar');
   if(msg){ bar.textContent=msg; bar.classList.add('on'); } else bar.classList.remove('on');
@@ -509,18 +524,29 @@ async function pull(){
   try{
     const snap=await cloud.fns.get(cloud.ref);
     const d=snap.exists()?snap.val():null;
-    if(d){
+    const local=loadLocal();
+    if(local && (local.updated||0) > (d&&d.updated||0)){
+      /* オフライン中などに、クラウドへまだ届いていないローカルの変更が残っている場合はそちらを優先する */
+      articles=Array.isArray(local.articles)?local.articles:[];
+      notes=Array.isArray(local.notes)?local.notes:[];
+      if(local.theme) applyTheme(local.theme);
+      migrate(); renderList(); renderNotes();
+      $('savedNote').textContent='✓ 端末に残っていた変更を復元しました';
+      await save();
+    }else if(d){
       articles=Array.isArray(d.articles)?d.articles:[];
       notes=Array.isArray(d.notes)?d.notes:[];
       if(d.theme) applyTheme(d.theme);
       migrate(); renderList(); renderNotes();
       $('savedNote').textContent='✓ 読み込み済み';
+      saveLocal();
     }else if(articles.length||notes.length){
       save();
     }
   }catch(e){ warn('読み込めませんでした（'+(e.message||e)+'）'); }
 }
 function queueSave(){
+  saveLocal();
   clearTimeout(saveTimer);
   if(cloud.ready && cloud.user) $('savedNote').textContent='…';
   saveTimer=setTimeout(()=>save(),1200);
@@ -562,7 +588,7 @@ function migrate(){
 
 /* ===== 一覧 ===== */
 const fmt=ts=>{const d=new Date(ts);return `${d.getFullYear()}.${String(d.getMonth()+1).padStart(2,'0')}.${String(d.getDate()).padStart(2,'0')}`;};
-let listFilter={q:'',tag:null,cat:null,sort:'updated_desc'};
+let listFilter={q:'',tag:null,cat:null,status:null,sort:'updated_desc'};
 const alive=()=>articles.filter(a=>!a.deletedAt);
 function allTags(){
   const s=new Set();
@@ -576,6 +602,7 @@ function allCategories(){
 }
 function filteredSorted(){
   let list=alive();
+  if(listFilter.status) list=list.filter(a=>(a.status||'draft')===listFilter.status);
   if(listFilter.cat) list=list.filter(a=>(a.category||'')===listFilter.cat);
   if(listFilter.tag) list=list.filter(a=>Array.isArray(a.tags)&&a.tags.includes(listFilter.tag));
   if(listFilter.q){
@@ -595,6 +622,11 @@ function renderCatBar(){
   const cats=allCategories(), bar=$('catBar');
   bar.innerHTML=cats.map(c=>`<button class="tagchip ${listFilter.cat===c?'active':''}" data-cat="${esc(c)}">📂 ${esc(c)}</button>`).join('');
 }
+const STATUS_OPTS=[{k:'draft',label:'📝 下書き'},{k:'published',label:'✅ 公開済み'}];
+function renderStatusBar(){
+  const bar=$('statusBar');
+  bar.innerHTML=STATUS_OPTS.map(o=>`<button class="tagchip ${listFilter.status===o.k?'active':''}" data-status-filter="${o.k}">${o.label}</button>`).join('');
+}
 function updateBulkBar(){
   $('bulkBar').hidden=!selectMode;
   $('bulkCount').textContent=selected.size+'件選択';
@@ -605,7 +637,7 @@ function exitSelectMode(){
   updateBulkBar();
 }
 function renderList(){
-  renderCatBar(); renderTagBar();
+  renderStatusBar(); renderCatBar(); renderTagBar();
   const visible=alive();
   $('listCount').textContent=visible.length?visible.length+'件':'';
   if(!visible.length){ $('cards').innerHTML='<div class="empty"><p>📄 まだ記事がありません。<br>「✏️ 新しい記事」から始められます。</p></div>'; return; }
@@ -636,6 +668,11 @@ $('tagBar').addEventListener('click',e=>{
 $('catBar').addEventListener('click',e=>{
   const b=e.target.closest('[data-cat]'); if(!b) return;
   listFilter.cat = listFilter.cat===b.dataset.cat ? null : b.dataset.cat;
+  renderList();
+});
+$('statusBar').addEventListener('click',e=>{
+  const b=e.target.closest('[data-status-filter]'); if(!b) return;
+  listFilter.status = listFilter.status===b.dataset.statusFilter ? null : b.dataset.statusFilter;
   renderList();
 });
 $('selectModeBtn').addEventListener('click',()=>{
@@ -1063,7 +1100,7 @@ async function restore(text){
   }
   if(!await ask(`記事 ${data.articles.length}件 / ネタ ${data.notes.length}件 で置き換えます。今の内容は消えます。`)) return;
   articles=data.articles; notes=data.notes; curId=null; open.clear();
-  migrate(); renderList(); renderNotes(); save();
+  migrate(); renderList(); renderNotes(); saveLocal(); save();
   $('viewEdit').hidden=true; $('viewList').hidden=false; $('backBtn').hidden=true;
   $('bkMsg').textContent='復元しました';
 }
@@ -1097,8 +1134,23 @@ $('cfgLink').addEventListener('click',()=>{
   $('cfgMsg').textContent='URLをコピーしました。ブックマークしてください。';
 });
 
+const startupLocal=loadLocal();
+if(startupLocal){
+  articles=Array.isArray(startupLocal.articles)?startupLocal.articles:[];
+  notes=Array.isArray(startupLocal.notes)?startupLocal.notes:[];
+  if(startupLocal.theme) applyTheme(startupLocal.theme);
+  migrate();
+}
 renderList(); renderNotes();
 initCloud();
+
+window.addEventListener('offline',()=>{
+  warn('オフラインです。この端末には保存され続けます。オンラインに戻ると自動で同期されます。');
+});
+window.addEventListener('online',()=>{
+  warn('');
+  if(cloud.ready && cloud.user) save();
+});
 
 if('serviceWorker' in navigator){
   window.addEventListener('load',()=>{
