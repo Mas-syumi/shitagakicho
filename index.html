@@ -415,6 +415,7 @@ $('themeBtn').addEventListener('click',()=>{ applyTheme(theme==='dark'?'light':'
 
 /* ===== 保存先（Firebase） ===== */
 const cloud={ready:false, user:null, db:null, ref:null, fns:null};
+let pulledFor=null;
 function warn(msg){
   const bar=$('warnBar');
   if(msg){ bar.textContent=msg; bar.classList.add('on'); } else bar.classList.remove('on');
@@ -448,8 +449,9 @@ async function initCloud(){
         cloud.ref=db.ref(cloud.db,'users/'+u.uid+'/shitagaki');
         setCloudStatus('Firebaseに保存中（'+(u.displayName||u.email||'ログイン済み')+'）');
         warn('');
-        await pull();
+        if(pulledFor!==u.uid){ pulledFor=u.uid; await pull(); }
       }else{
+        pulledFor=null;
         $('authBtn').textContent='ログイン';
         cloud.ref=null;
         setCloudStatus('未ログイン。ログインすると保存されます。');
