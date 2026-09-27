@@ -93,6 +93,13 @@ main{max-width:900px;margin:0 auto;padding:18px 16px 70px}
       padding:4px 11px;font-size:12px}
 .tagchip:hover{border-color:var(--ink-mid);color:var(--ink)}
 .tagchip.active{background-color:var(--ink);color:var(--paper);border-color:var(--ink)}
+.bulkbar{display:flex;gap:8px;align-items:center;margin:-4px 0 14px;flex-wrap:wrap}
+.bulk-count{font-family:var(--mono);font-size:12px;color:var(--ink-mid)}
+.card .pick{margin-right:2px;margin-top:4px;flex:none}
+.card .actions{display:flex;gap:6px;flex:none}
+.card .restore{border:1px solid var(--ink-mid);background:none;color:var(--ink-mid);
+      font-size:12px;font-weight:700;padding:5px 12px;border-radius:2px;line-height:1.5}
+.card .restore:hover{background-color:var(--ink-mid);color:#fff}
 .card .badges{display:flex;gap:6px;flex-wrap:wrap;margin-top:7px}
 .card .tagpill{font-size:10.5px;color:var(--ink-mid);background-color:var(--paper);border:1px solid var(--rule);
       border-radius:10px;padding:1px 8px}
@@ -244,7 +251,15 @@ html[data-theme="dark"] .status-toggle[data-status="published"]{border-color:#3E
     <div class="list-head">
       <h2>📚 記事</h2><span class="count" id="listCount"></span>
       <span class="spacer"></span>
+      <button class="btn btn-quiet btn-sm" id="selectModeBtn">☑️ 選択</button>
       <button class="btn btn-solid" id="newBtn">✏️ 新しい記事</button>
+    </div>
+    <div class="bulkbar" id="bulkBar" hidden>
+      <span class="bulk-count" id="bulkCount">0件選択</span>
+      <button class="btn btn-quiet btn-sm" id="bulkTagBtn">🏷 タグ付け</button>
+      <button class="btn btn-quiet btn-sm" id="bulkDelBtn">🗑 ゴミ箱へ</button>
+      <span class="spacer"></span>
+      <button class="btn btn-quiet btn-sm" id="bulkCancelBtn">キャンセル</button>
     </div>
     <div class="filterbar">
       <input type="search" id="searchInput" class="search-input" placeholder="🔍 タイトル・本文を検索">
@@ -254,18 +269,32 @@ html[data-theme="dark"] .status-toggle[data-status="published"]{border-color:#3E
         <option value="title_asc">タイトル順</option>
       </select>
     </div>
+    <div class="tagbar" id="catBar"></div>
     <div class="tagbar" id="tagBar"></div>
     <div id="cards"></div>
     <div class="list-foot">
       <button class="btn btn-quiet btn-sm" id="backupBtn">💾 バックアップ・復元</button>
+      <button class="btn btn-quiet btn-sm" id="trashBtn">🗑 ゴミ箱</button>
       <span class="note-txt">記事とネタ帳をまとめて書き出し／読み込み</span>
     </div>
+  </section>
+
+  <section id="viewTrash" hidden>
+    <div class="list-head">
+      <h2>🗑 ゴミ箱</h2><span class="count" id="trashCount"></span>
+      <span class="spacer"></span>
+      <button class="btn btn-quiet btn-sm" id="trashBackBtn">← 一覧へ戻る</button>
+    </div>
+    <p class="addhint">ここにある記事は一覧に表示されません。「復元」で一覧に戻せます。</p>
+    <div id="trashCards"></div>
   </section>
 
   <section id="viewEdit" hidden>
     <input type="text" class="title-input" id="titleInput" placeholder="無題の記事">
     <div class="meta-row">
       <input type="text" class="tag-input" id="tagInput" placeholder="🏷 タグ（カンマ区切り、例: 旅行, 雑記）">
+      <input type="text" class="tag-input" id="categoryInput" list="categoryOptions" placeholder="📂 分類（例: 日記）">
+      <datalist id="categoryOptions"></datalist>
       <button class="status-toggle" id="statusToggle" data-status="draft">📝 下書き</button>
     </div>
     <div class="bar">
@@ -379,6 +408,8 @@ const FIELDS=[
   {k:'memo',  label:'論点・キラーフレーズ・備考', ph:'扱う論点、入れたい一文、参照元など'}
 ];
 let articles=[], notes=[], curId=null, saveTimer=null, theme='light';
+let selectMode=false;
+const selected=new Set();
 const open=new Set();
 const openFields=new Set();
 const foldedFields=new Set();
@@ -512,6 +543,8 @@ function migrate(){
     if(a.body===undefined) a.body='';
     if(!Array.isArray(a.tags)) a.tags=[];
     if(a.status!=='draft' && a.status!=='published') a.status='draft';
+    if(typeof a.category!=='string') a.category='';
+    if(a.deletedAt===undefined) a.deletedAt=null;
     if(Array.isArray(a.phrases)){
       a.phrases.forEach(p=>{ if(p.text) notes.push({id:uid('n'),text:p.text,memo:p.text,think:''}); });
       delete a.phrases;
@@ -529,14 +562,21 @@ function migrate(){
 
 /* ===== 一覧 ===== */
 const fmt=ts=>{const d=new Date(ts);return `${d.getFullYear()}.${String(d.getMonth()+1).padStart(2,'0')}.${String(d.getDate()).padStart(2,'0')}`;};
-let listFilter={q:'',tag:null,sort:'updated_desc'};
+let listFilter={q:'',tag:null,cat:null,sort:'updated_desc'};
+const alive=()=>articles.filter(a=>!a.deletedAt);
 function allTags(){
   const s=new Set();
-  articles.forEach(a=>(a.tags||[]).forEach(t=>s.add(t)));
+  alive().forEach(a=>(a.tags||[]).forEach(t=>s.add(t)));
+  return [...s].sort((a,b)=>a.localeCompare(b,'ja'));
+}
+function allCategories(){
+  const s=new Set();
+  alive().forEach(a=>{ if(a.category) s.add(a.category); });
   return [...s].sort((a,b)=>a.localeCompare(b,'ja'));
 }
 function filteredSorted(){
-  let list=articles.slice();
+  let list=alive();
+  if(listFilter.cat) list=list.filter(a=>(a.category||'')===listFilter.cat);
   if(listFilter.tag) list=list.filter(a=>Array.isArray(a.tags)&&a.tags.includes(listFilter.tag));
   if(listFilter.q){
     const q=listFilter.q.toLowerCase();
@@ -551,24 +591,39 @@ function renderTagBar(){
   const tags=allTags(), bar=$('tagBar');
   bar.innerHTML=tags.map(t=>`<button class="tagchip ${listFilter.tag===t?'active':''}" data-tag="${esc(t)}">${esc(t)}</button>`).join('');
 }
+function renderCatBar(){
+  const cats=allCategories(), bar=$('catBar');
+  bar.innerHTML=cats.map(c=>`<button class="tagchip ${listFilter.cat===c?'active':''}" data-cat="${esc(c)}">📂 ${esc(c)}</button>`).join('');
+}
+function updateBulkBar(){
+  $('bulkBar').hidden=!selectMode;
+  $('bulkCount').textContent=selected.size+'件選択';
+}
+function exitSelectMode(){
+  selectMode=false; selected.clear();
+  $('selectModeBtn').textContent='☑️ 選択';
+  updateBulkBar();
+}
 function renderList(){
-  renderTagBar();
-  $('listCount').textContent=articles.length?articles.length+'件':'';
-  if(!articles.length){ $('cards').innerHTML='<div class="empty"><p>📄 まだ記事がありません。<br>「✏️ 新しい記事」から始められます。</p></div>'; return; }
+  renderCatBar(); renderTagBar();
+  const visible=alive();
+  $('listCount').textContent=visible.length?visible.length+'件':'';
+  if(!visible.length){ $('cards').innerHTML='<div class="empty"><p>📄 まだ記事がありません。<br>「✏️ 新しい記事」から始められます。</p></div>'; return; }
   const list=filteredSorted();
   if(!list.length){ $('cards').innerHTML='<div class="empty"><p>🔍 条件に合う記事がありません。</p></div>'; return; }
   $('cards').innerHTML=list.map(a=>`
     <div class="card" data-id="${a.id}">
+      ${selectMode?`<input type="checkbox" class="pick" data-pick="${a.id}" ${selected.has(a.id)?'checked':''}>`:''}
       <div>
         <h3>${esc(a.title||'無題の記事')}</h3>
-        <div class="meta">${fmt(a.updated)}　${chars(a.body)}字</div>
+        <div class="meta">${fmt(a.updated)}　${chars(a.body)}字${a.category?'　📂 '+esc(a.category):''}</div>
         ${a.body.trim()?`<div class="excerpt">${esc(a.body.trim().slice(0,90))}</div>`:''}
         <div class="badges">
           <span class="statuspill ${a.status==='published'?'published':''}">${a.status==='published'?'✅ 公開済み':'📝 下書き'}</span>
           ${(a.tags||[]).map(t=>`<span class="tagpill">${esc(t)}</span>`).join('')}
         </div>
       </div>
-      <button class="del" data-del="${a.id}">🗑 削除</button>
+      ${selectMode?'':`<button class="del" data-del="${a.id}">🗑 削除</button>`}
     </div>`).join('');
 }
 $('searchInput').addEventListener('input',e=>{ listFilter.q=e.target.value; renderList(); });
@@ -578,14 +633,51 @@ $('tagBar').addEventListener('click',e=>{
   listFilter.tag = listFilter.tag===b.dataset.tag ? null : b.dataset.tag;
   renderList();
 });
+$('catBar').addEventListener('click',e=>{
+  const b=e.target.closest('[data-cat]'); if(!b) return;
+  listFilter.cat = listFilter.cat===b.dataset.cat ? null : b.dataset.cat;
+  renderList();
+});
+$('selectModeBtn').addEventListener('click',()=>{
+  selectMode=!selectMode; selected.clear();
+  $('selectModeBtn').textContent = selectMode ? '✕ 選択を終了' : '☑️ 選択';
+  updateBulkBar(); renderList();
+});
+$('bulkCancelBtn').addEventListener('click',()=>{ exitSelectMode(); renderList(); });
+$('bulkDelBtn').addEventListener('click',async()=>{
+  if(!selected.size) return;
+  if(await ask(`選択した${selected.size}件をゴミ箱に移動します。`)){
+    articles.forEach(a=>{ if(selected.has(a.id)) a.deletedAt=Date.now(); });
+    if(curId && selected.has(curId)) curId=null;
+    exitSelectMode(); renderList(); save();
+  }
+});
+$('bulkTagBtn').addEventListener('click',()=>{
+  if(!selected.size) return;
+  const input=prompt(`選択した${selected.size}件に追加するタグ（カンマ区切り）`);
+  if(!input) return;
+  const newTags=input.split(',').map(t=>t.trim()).filter(Boolean);
+  if(!newTags.length) return;
+  articles.forEach(a=>{
+    if(selected.has(a.id)) a.tags=[...new Set([...(a.tags||[]),...newTags])];
+  });
+  exitSelectMode(); renderList(); save();
+});
 $('cards').addEventListener('click',async e=>{
+  if(selectMode){
+    const c=e.target.closest('.card'); if(!c) return;
+    const id=c.dataset.id;
+    if(selected.has(id)) selected.delete(id); else selected.add(id);
+    renderList(); updateBulkBar();
+    return;
+  }
   const d=e.target.closest('[data-del]');
   if(d){
     e.stopPropagation();
     const id=d.dataset.del;
     const a=articles.find(x=>x.id===id);
-    if(await ask(`「${a.title||'無題の記事'}」を削除します。元に戻せません。`)){
-      articles=articles.filter(x=>x.id!==id);
+    if(await ask(`「${a.title||'無題の記事'}」をゴミ箱に移動します。`)){
+      a.deletedAt=Date.now();
       if(curId===id) curId=null;
       renderList(); save();
     }
@@ -594,8 +686,51 @@ $('cards').addEventListener('click',async e=>{
   const c=e.target.closest('.card'); if(c) openArticle(c.dataset.id);
 });
 $('newBtn').addEventListener('click',()=>{
-  const a={id:uid('a'),title:'',body:'',tags:[],status:'draft',created:Date.now(),updated:Date.now()};
+  const a={id:uid('a'),title:'',body:'',tags:[],category:'',status:'draft',deletedAt:null,created:Date.now(),updated:Date.now()};
   articles.push(a); queueSave(); openArticle(a.id);
+});
+
+/* ===== ゴミ箱 ===== */
+function renderTrash(){
+  const trashed=articles.filter(a=>a.deletedAt).sort((a,b)=>b.deletedAt-a.deletedAt);
+  $('trashCount').textContent=trashed.length?trashed.length+'件':'';
+  if(!trashed.length){ $('trashCards').innerHTML='<div class="empty"><p>🗑 ゴミ箱は空です。</p></div>'; return; }
+  $('trashCards').innerHTML=trashed.map(a=>`
+    <div class="card" data-id="${a.id}">
+      <div>
+        <h3>${esc(a.title||'無題の記事')}</h3>
+        <div class="meta">${fmt(a.deletedAt)} 削除　${chars(a.body)}字</div>
+      </div>
+      <div class="actions">
+        <button class="restore" data-restore="${a.id}">↩️ 復元</button>
+        <button class="del" data-perma="${a.id}">🗑 完全削除</button>
+      </div>
+    </div>`).join('');
+}
+$('trashCards').addEventListener('click',async e=>{
+  const r=e.target.closest('[data-restore]');
+  if(r){
+    const a=articles.find(x=>x.id===r.dataset.restore);
+    if(a){ a.deletedAt=null; renderTrash(); renderList(); save(); }
+    return;
+  }
+  const p=e.target.closest('[data-perma]');
+  if(p){
+    const id=p.dataset.perma, a=articles.find(x=>x.id===id);
+    if(await ask(`「${a.title||'無題の記事'}」を完全に削除します。元に戻せません。`)){
+      articles=articles.filter(x=>x.id!==id);
+      renderTrash(); save();
+    }
+  }
+});
+$('trashBtn').addEventListener('click',()=>{
+  renderTrash();
+  $('viewList').hidden=true; $('viewTrash').hidden=false;
+  window.scrollTo(0,0);
+});
+$('trashBackBtn').addEventListener('click',()=>{
+  $('viewTrash').hidden=true; $('viewList').hidden=false;
+  renderList(); window.scrollTo(0,0);
 });
 
 /* ===== 書くところ ===== */
@@ -604,10 +739,15 @@ function setStatusToggle(status){
   b.dataset.status=status;
   b.textContent = status==='published' ? '✅ 公開済み' : '📝 下書き';
 }
+function renderCategoryOptions(){
+  $('categoryOptions').innerHTML=allCategories().map(c=>`<option value="${esc(c)}">`).join('');
+}
 function openArticle(id){
   curId=id; const a=cur();
   $('titleInput').value=a.title; $('bodyText').value=a.body; updateStats();
   $('tagInput').value=(a.tags||[]).join(', ');
+  renderCategoryOptions();
+  $('categoryInput').value=a.category||'';
   setStatusToggle(a.status||'draft');
   $('viewList').hidden=true; $('viewEdit').hidden=false; $('backBtn').hidden=false;
   window.scrollTo(0,0);
@@ -653,6 +793,10 @@ $('titleInput').addEventListener('input',e=>{cur().title=e.target.value;touch();
 $('bodyText').addEventListener('input',e=>{cur().body=e.target.value;updateStats();touch();});
 $('tagInput').addEventListener('input',e=>{
   cur().tags=e.target.value.split(',').map(t=>t.trim()).filter(Boolean);
+  touch();
+});
+$('categoryInput').addEventListener('input',e=>{
+  cur().category=e.target.value.trim();
   touch();
 });
 $('statusToggle').addEventListener('click',()=>{
