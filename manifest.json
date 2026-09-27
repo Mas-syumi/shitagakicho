@@ -1,0 +1,20 @@
+{
+  "name": "下書き帳",
+  "short_name": "下書き帳",
+  "description": "ブログ記事の下書き・整理・公開管理ができるメモアプリ",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#E9EFF7",
+  "theme_color": "#BFDBF7",
+  "lang": "ja",
+  "icons": [
+    {
+      "src": "icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}
