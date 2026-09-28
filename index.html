@@ -116,10 +116,10 @@ html[data-theme="dark"] .card .statuspill.published{background-color:#3E9463;bor
 .status-toggle[data-status="published"]{border-color:#2E7D4F;color:#2E7D4F}
 html[data-theme="dark"] .status-toggle[data-status="published"]{border-color:#3E9463;color:#3E9463}
 .date-field{font-size:12px;color:var(--ink-mid);white-space:nowrap}
-.fs-ctl{display:inline-flex;align-items:center;gap:4px;font-size:12px;color:var(--ink-mid);white-space:nowrap}
-.fs-ctl .btn:disabled{opacity:.4;cursor:default;background:none;color:var(--ink-mid)}
-.fs-ctl .btn{padding:4px 7px}
-@media(max-width:520px){ .fs-label{display:none} }
+.fs-select{border:1px solid var(--rule);background-color:var(--card);color:var(--ink-mid);border-radius:2px;
+      padding:4px 6px;font-family:var(--sans);font-size:12.5px;cursor:pointer}
+/* iPhoneは16px未満の入力欄を押すと画面を拡大するので、スマホでは16pxにする */
+@media(max-width:1099px){ .fs-select{font-size:16px;padding:4px 6px} }
 .date-field input{border:1px solid var(--rule);border-radius:2px;background-color:var(--card);
       padding:5px 6px;font-family:var(--sans);font-size:12.5px;color:var(--ink);margin-left:4px}
 
@@ -343,10 +343,11 @@ body.editing #viewEdit .bar[style]{margin-top:10px!important;margin-bottom:0}
       <button class="btn btn-quiet btn-sm" id="copyBtn">📋 そのままコピー</button>
       <button class="btn btn-quiet btn-sm" id="copyHtmlBtn">🌐 HTMLでコピー</button>
       <button class="btn btn-quiet btn-sm" id="notesBtn2">💡 ネタ帳を開く</button>
-      <span class="fs-ctl"><span class="fs-label">文字</span>
-        <button class="btn btn-quiet btn-sm" id="fsDown" title="本文の文字を小さく">A−</button>
-        <button class="btn btn-quiet btn-sm" id="fsUp" title="本文の文字を大きく">A＋</button>
-      </span>
+      <select class="fs-select" id="fontSize" title="本文の文字の大きさ">
+        <option value="14">文字 小</option>
+        <option value="16">文字 中</option>
+        <option value="20">文字 大</option>
+      </select>
     </div>
     <textarea id="bodyText" placeholder="ここに書く。&#10;&#10;## で見出し、### で小見出し&#10;- で箇条書き、**太字**、[文字](URL) でリンク"></textarea>
     <div class="stats" id="bodyStats"></div>
@@ -908,18 +909,18 @@ $('pubDate').addEventListener('change',e=>{
   touch();
 });
 /* 本文の文字の大きさ（端末ごとに記憶） */
-const FS_KEY='shitagaki-font-size', FS_STEPS=[14,16,18,20,22,24];
-let fsIdx=1;
-try{ const s=FS_STEPS.indexOf(parseInt(localStorage.getItem(FS_KEY),10)); if(s>=0) fsIdx=s; }catch(e){}
-function applyFontSize(){
-  $('bodyText').style.fontSize=FS_STEPS[fsIdx]+'px';
-  $('fsDown').disabled=fsIdx===0;
-  $('fsUp').disabled=fsIdx===FS_STEPS.length-1;
-  try{ localStorage.setItem(FS_KEY,FS_STEPS[fsIdx]); }catch(e){}
+const FS_KEY='shitagaki-font-size';
+function applyFontSize(px){
+  $('bodyText').style.fontSize=px+'px';
+  $('fontSize').value=String(px);
+  try{ localStorage.setItem(FS_KEY,px); }catch(e){}
 }
-$('fsDown').addEventListener('click',()=>{ if(fsIdx>0){ fsIdx--; applyFontSize(); } });
-$('fsUp').addEventListener('click',()=>{ if(fsIdx<FS_STEPS.length-1){ fsIdx++; applyFontSize(); } });
-applyFontSize();
+{
+  let saved=16;
+  try{ const v=parseInt(localStorage.getItem(FS_KEY),10); if(v) saved = v<=15 ? 14 : v<=17 ? 16 : 20; }catch(e){}
+  applyFontSize(saved);
+}
+$('fontSize').addEventListener('change',e=>applyFontSize(parseInt(e.target.value,10)));
 function updateStats(){
   const n=chars(cur().body);
   $('bodyStats').innerHTML=`<span><b>${n}</b> 字</span>`+
