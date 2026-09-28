@@ -229,7 +229,7 @@ html[data-theme="dark"] .note .donemark{color:#3E9463}
   body.editing{height:100vh;height:100dvh;min-height:0;overflow:hidden;display:flex;flex-direction:column}
   body.editing .top,body.editing .warnbar{flex:none}
   body.editing .shell{flex:1;min-height:0;display:flex;flex-direction:column}
-  body.editing main{flex:1;min-height:0;width:100%;display:flex;flex-direction:column;padding-bottom:12px}
+  body.editing main{flex:1;min-height:0;width:100%;display:flex;flex-direction:column;padding-bottom:calc(50px + env(safe-area-inset-bottom, 0px))}
   body.editing #viewEdit{flex:1;min-height:0;display:flex;flex-direction:column}
   body.editing #bodyText{flex:1 1 0;min-height:0;resize:none}
   body.editing #viewEdit .bar[style]{margin-top:10px!important;margin-bottom:0}
