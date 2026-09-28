@@ -213,6 +213,15 @@ html[data-theme="dark"] .status-toggle[data-status="published"]{border-color:#3E
    background:rgba(255,255,255,.18);border-radius:10px;padding:1px 7px}
 @media(max-width:1099px){
   #notesBtn,#notesBtn2{display:none}
+  /* スマホで編集中は画面を固定し、本文欄だけをスクロールさせる */
+  body.editing{height:100vh;height:100dvh;min-height:0;overflow:hidden;display:flex;flex-direction:column}
+  body.editing .top,body.editing .warnbar{flex:none}
+  body.editing .shell{flex:1;min-height:0;display:flex;flex-direction:column}
+  body.editing main{flex:1;min-height:0;width:100%;display:flex;flex-direction:column;padding-bottom:12px}
+  body.editing #viewEdit{flex:1;min-height:0;display:flex;flex-direction:column}
+  body.editing #bodyText{flex:1 1 0;min-height:0;resize:none}
+  body.editing #viewEdit .bar[style]{margin-top:10px!important;margin-bottom:0}
+  body.editing .stats{padding-right:150px;row-gap:2px}
 }
 .drawer-resize{display:none}
 @media(min-width:1100px){
@@ -796,6 +805,7 @@ function openArticle(id){
   $('categoryInput').value=a.category||'';
   setStatusToggle(a.status||'draft');
   $('viewList').hidden=true; $('viewEdit').hidden=false; $('backBtn').hidden=false;
+  document.body.classList.add('editing');
   window.scrollTo(0,0);
 }
 async function flushSave(){
@@ -805,6 +815,7 @@ async function flushSave(){
 function goList(){
   curId=null; closeDrawer();
   $('viewEdit').hidden=true; $('viewList').hidden=false; $('backBtn').hidden=true;
+  document.body.classList.remove('editing');
   renderList(); window.scrollTo(0,0);
 }
 $('doneBtn').addEventListener('click',async()=>{
@@ -832,6 +843,7 @@ function collapseNotes(){
 $('backBtn').addEventListener('click',()=>{
   curId=null; closeDrawer();
   $('viewEdit').hidden=true; $('viewList').hidden=false; $('backBtn').hidden=true;
+  document.body.classList.remove('editing');
   renderList(); window.scrollTo(0,0);
 });
 $('titleInput').addEventListener('input',e=>{cur().title=e.target.value;touch();});
@@ -1138,6 +1150,7 @@ async function restore(text){
   articles=data.articles; notes=data.notes; curId=null; open.clear();
   migrate(); renderList(); renderNotes(); saveLocal(); save();
   $('viewEdit').hidden=true; $('viewList').hidden=false; $('backBtn').hidden=true;
+  document.body.classList.remove('editing');
   $('bkMsg').textContent='復元しました';
 }
 $('fileBtn').addEventListener('click',()=>$('fileInput').click());
