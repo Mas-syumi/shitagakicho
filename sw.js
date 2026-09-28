@@ -20,8 +20,11 @@ self.addEventListener('fetch', e => {
   if (e.request.method !== 'GET' || url.origin !== location.origin) return;
 
   e.respondWith(
-    fetch(e.request).then(res => {
-      if (res.ok) caches.open(CACHE_NAME).then(cache => cache.put(e.request, res.clone()));
+    fetch(e.request, { cache: 'no-cache' }).then(res => {
+      if (res.ok) {
+        const copy = res.clone();
+        e.waitUntil(caches.open(CACHE_NAME).then(cache => cache.put(e.request, copy)));
+      }
       return res;
     }).catch(() => caches.match(e.request))
   );
