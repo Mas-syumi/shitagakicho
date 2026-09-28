@@ -637,6 +637,8 @@ function renderStatusBar(){
 function updateBulkBar(){
   $('bulkBar').hidden=!selectMode;
   $('bulkCount').textContent=selected.size+'件選択';
+  $('bulkTagBtn').hidden=!selected.size;
+  $('bulkDelBtn').hidden=!selected.size;
 }
 function exitSelectMode(){
   selectMode=false; selected.clear();
