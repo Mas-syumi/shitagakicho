@@ -116,10 +116,12 @@ html[data-theme="dark"] .card .statuspill.published{background-color:#3E9463;bor
 .status-toggle[data-status="published"]{border-color:#2E7D4F;color:#2E7D4F}
 html[data-theme="dark"] .status-toggle[data-status="published"]{border-color:#3E9463;color:#3E9463}
 .date-field{font-size:12px;color:var(--ink-mid);white-space:nowrap}
-.fs-select{border:1px solid var(--rule);background-color:var(--card);color:var(--ink-mid);border-radius:2px;
-      padding:4px 6px;font-family:var(--sans);font-size:12.5px;cursor:pointer}
-/* iPhoneは16px未満の入力欄を押すと画面を拡大するので、スマホでは16pxにする */
-@media(max-width:1099px){ .fs-select{font-size:16px;padding:4px 6px} }
+/* 見た目は他のボタンと揃え、実際の選択欄は透明にして上に重ねる。
+   iPhoneは16px未満の入力欄を押すと画面を拡大するので、透明な選択欄は16pxにしておく */
+.fs-pick{position:relative;display:inline-block;line-height:normal;cursor:pointer;white-space:nowrap}
+.fs-pick select{position:absolute;inset:0;width:100%;height:100%;opacity:0;font-size:16px;cursor:pointer;
+      -webkit-appearance:none;appearance:none;border:0}
+.fs-pick:focus-within{outline:2px solid var(--ink);outline-offset:2px}
 .date-field input{border:1px solid var(--rule);border-radius:2px;background-color:var(--card);
       padding:5px 6px;font-family:var(--sans);font-size:12.5px;color:var(--ink);margin-left:4px}
 
@@ -343,11 +345,11 @@ body.editing #viewEdit .bar[style]{margin-top:10px!important;margin-bottom:0}
       <button class="btn btn-quiet btn-sm" id="copyBtn">📋 そのままコピー</button>
       <button class="btn btn-quiet btn-sm" id="copyHtmlBtn">🌐 HTMLでコピー</button>
       <button class="btn btn-quiet btn-sm" id="notesBtn2">💡 ネタ帳を開く</button>
-      <select class="fs-select" id="fontSize" title="本文の文字の大きさ">
+      <label class="btn btn-quiet btn-sm fs-pick"><span id="fontFace">文字 中 ▾</span><select id="fontSize" title="本文の文字の大きさ">
         <option value="14">文字 小</option>
         <option value="16">文字 中</option>
         <option value="20">文字 大</option>
-      </select>
+      </select></label>
     </div>
     <textarea id="bodyText" placeholder="ここに書く。&#10;&#10;## で見出し、### で小見出し&#10;- で箇条書き、**太字**、[文字](URL) でリンク"></textarea>
     <div class="stats" id="bodyStats"></div>
@@ -913,6 +915,7 @@ const FS_KEY='shitagaki-font-size';
 function applyFontSize(px){
   $('bodyText').style.fontSize=px+'px';
   $('fontSize').value=String(px);
+  $('fontFace').textContent='文字 '+({14:'小',16:'中',20:'大'}[px])+' ▾';
   try{ localStorage.setItem(FS_KEY,px); }catch(e){}
 }
 {
