@@ -186,6 +186,8 @@ html[data-theme="dark"] .status-toggle[data-status="published"]{border-color:#3E
 .note .foot button:hover{background:var(--rule);color:var(--ink)}
 .note .foot .done-btn{border-color:#2E7D4F;color:#2E7D4F;font-weight:700}
 .note .foot .done-btn:hover{background-color:#2E7D4F;color:#fff}
+.note .foot button:disabled,.note .foot button:disabled:hover{opacity:.45;cursor:default;background:none;color:inherit}
+.note .foot .done-btn:disabled,.note .foot .done-btn:disabled:hover{color:#2E7D4F}
 html[data-theme="dark"] .note .foot .done-btn{border-color:#3E9463;color:#3E9463}
 .note.done{opacity:.72}
 .note .donemark{font-size:11.5px;font-weight:700;color:#2E7D4F;margin-top:5px;font-family:var(--mono)}
@@ -889,7 +891,6 @@ $('categoryInput').addEventListener('input',e=>{
 $('statusToggle').addEventListener('click',()=>{
   const a=cur();
   a.status = a.status==='published' ? 'draft' : 'published';
-  if(a.status==='published' && !a.publishedAt) a.publishedAt=Date.now();
   setStatusToggle(a.status);
   touch();
 });
@@ -1053,6 +1054,7 @@ function preview(n){
   return rows.join('');
 }
 let showDone=false;
+const completing=new Set();
 function renderNotes(){
   const active=notes.filter(n=>!n.doneAt), doneCount=notes.length-active.length;
   $('fabCount').textContent=active.length?active.length:'';
@@ -1099,7 +1101,9 @@ function renderNotes(){
           </div>`;}).join('')}
         <div class="foot">
           <button data-cpall>まとめてコピー</button>
-          ${n.doneAt?`<button data-done>↩ 未完了に戻す</button><label class="date-field">完了日 <input type="date" data-donedate value="${toDateInput(n.doneAt)}"></label>`:`<button class="done-btn" data-done>✓ 完了</button>`}
+          ${n.doneAt?`<button data-done>↩ 未完了に戻す</button><label class="date-field">完了日 <input type="date" data-donedate value="${toDateInput(n.doneAt)}"></label>`
+            :completing.has(n.id)?`<label class="date-field">完了日 <input type="date" data-completedate></label><button class="done-btn" data-confirmdone disabled>完了にする</button><button data-canceldone>やめる</button>`
+            :`<button class="done-btn" data-done>✓ 完了</button>`}
           <button class="rm" data-rm>🗑 削除</button>
         </div>
       </div>
@@ -1122,14 +1126,19 @@ function addNote(){
 $('noteAdd').addEventListener('click',addNote);
 $('doneToggle').addEventListener('click',()=>{ showDone=!showDone; renderNotes(); });
 $('noteList').addEventListener('change',e=>{
-  const t=e.target; if(!t.hasAttribute('data-donedate') || !t.value) return;
+  const t=e.target;
+  if(t.hasAttribute('data-completedate')){ syncConfirm(t); return; }
+  if(!t.hasAttribute('data-donedate') || !t.value) return;
   notes.find(x=>x.id===t.closest('.note').dataset.id).doneAt=fromDateInput(t.value);
   renderNotes(); queueSave();
 });
 $('noteInput').addEventListener('input',e=>autoGrow(e.target));
 $('noteInput').addEventListener('keydown',e=>{ if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing){ e.preventDefault(); addNote(); } });
+const syncConfirm=t=>{ const btn=t.closest('.foot').querySelector('[data-confirmdone]'); if(btn) btn.disabled=!t.value; };
 $('noteList').addEventListener('input',e=>{
-  const t=e.target; if(!t.dataset.field) return;
+  const t=e.target;
+  if(t.hasAttribute('data-completedate')){ syncConfirm(t); return; }
+  if(!t.dataset.field) return;
   notes.find(x=>x.id===t.closest('.note').dataset.id)[t.dataset.field]=t.value; queueSave();
 });
 $('noteList').addEventListener('click',e=>{
@@ -1175,9 +1184,19 @@ $('noteList').addEventListener('click',e=>{
     copyText(txt,b,'まとめてコピー');
   }
   else if(b.hasAttribute('data-done')){
-    n.doneAt = n.doneAt ? null : Date.now();
-    if(n.doneAt && !showDone) open.delete(n.id);
+    if(n.doneAt){ n.doneAt=null; renderNotes(); queueSave(); return; }
+    completing.add(n.id); renderNotes();
+    const inp=$('noteList').querySelector(`.note[data-id="${n.id}"] [data-completedate]`);
+    if(inp) inp.focus();
+  }
+  else if(b.hasAttribute('data-confirmdone')){
+    const v=li.querySelector('[data-completedate]').value; if(!v) return;
+    n.doneAt=fromDateInput(v); completing.delete(n.id);
+    if(!showDone) open.delete(n.id);
     renderNotes(); queueSave();
+  }
+  else if(b.hasAttribute('data-canceldone')){
+    completing.delete(n.id); renderNotes();
   }
   else if(b.hasAttribute('data-rm')){
     ask('このネタを削除します。元に戻せません。').then(ok=>{
