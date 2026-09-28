@@ -115,6 +115,9 @@ html[data-theme="dark"] .card .statuspill.published{background-color:#3E9463;bor
       padding:7px 12px;font-size:12.5px;font-weight:700}
 .status-toggle[data-status="published"]{border-color:#2E7D4F;color:#2E7D4F}
 html[data-theme="dark"] .status-toggle[data-status="published"]{border-color:#3E9463;color:#3E9463}
+.date-field{font-size:12px;color:var(--ink-mid);white-space:nowrap}
+.date-field input{border:1px solid var(--rule);border-radius:2px;background-color:var(--card);
+      padding:5px 6px;font-family:var(--sans);font-size:12.5px;color:var(--ink);margin-left:4px}
 
 .title-input{width:100%;border:none;background:none;font-size:22px;font-weight:700;color:var(--ink);padding:2px 0}
 .title-input::placeholder{color:var(--ink-soft)}
@@ -223,16 +226,18 @@ html[data-theme="dark"] .note .donemark{color:#3E9463}
    padding:12px 20px;box-shadow:0 3px 14px rgba(10,26,52,.35)}
 .notes-fab .n{font-family:var(--mono);font-size:12px;opacity:.85;margin-left:6px;
    background:rgba(255,255,255,.18);border-radius:10px;padding:1px 7px}
+/* 編集中は画面を固定し、本文欄（とネタ帳）の中だけをスクロールさせる */
+body.editing{height:100vh;height:100dvh;min-height:0;overflow:hidden;display:flex;flex-direction:column}
+body.editing .top,body.editing .warnbar{flex:none}
+body.editing .shell{flex:1;min-height:0;display:flex}
+body.editing main{flex:1;min-height:0;display:flex;flex-direction:column}
+body.editing #viewEdit{flex:1;min-height:0;display:flex;flex-direction:column}
+body.editing #bodyText{flex:1 1 0;min-height:0;resize:none}
+body.editing #viewEdit .bar[style]{margin-top:10px!important;margin-bottom:0}
 @media(max-width:1099px){
   #notesBtn,#notesBtn2{display:none}
-  /* スマホで編集中は画面を固定し、本文欄だけをスクロールさせる */
-  body.editing{height:100vh;height:100dvh;min-height:0;overflow:hidden;display:flex;flex-direction:column}
-  body.editing .top,body.editing .warnbar{flex:none}
-  body.editing .shell{flex:1;min-height:0;display:flex;flex-direction:column}
-  body.editing main{flex:1;min-height:0;width:100%;display:flex;flex-direction:column;padding-bottom:calc(50px + env(safe-area-inset-bottom, 0px))}
-  body.editing #viewEdit{flex:1;min-height:0;display:flex;flex-direction:column}
-  body.editing #bodyText{flex:1 1 0;min-height:0;resize:none}
-  body.editing #viewEdit .bar[style]{margin-top:10px!important;margin-bottom:0}
+  body.editing .shell{flex-direction:column}
+  body.editing main{width:100%;padding-bottom:calc(50px + env(safe-area-inset-bottom, 0px))}
   body.editing .stats{padding-right:150px;row-gap:2px}
 }
 .drawer-resize{display:none}
@@ -248,6 +253,8 @@ html[data-theme="dark"] .note .donemark{color:#3E9463}
   .drawer-resize::after{content:"";position:absolute;left:5px;top:50%;width:6px;height:56px;margin-top:-28px;
      border-radius:3px;background-color:var(--rule);border:1px solid var(--ink-soft)}
   .drawer-resize:hover::after,.drawer-resize.dragging::after{background-color:var(--ink-mid);border-color:var(--ink-mid)}
+  body.editing main{padding-bottom:20px;align-self:stretch}
+  body.editing #notesDrawer{position:relative;top:auto;height:auto;align-self:stretch}
 }
 
 @media(max-width:520px){
@@ -324,6 +331,7 @@ html[data-theme="dark"] .note .donemark{color:#3E9463}
       <input type="text" class="tag-input" id="categoryInput" list="categoryOptions" placeholder="📂 分類（例: 日記）">
       <datalist id="categoryOptions"></datalist>
       <button class="status-toggle" id="statusToggle" data-status="draft">📝 下書き</button>
+      <label class="date-field" id="pubDateWrap" hidden>公開日 <input type="date" id="pubDate"></label>
     </div>
     <div class="bar">
       <button class="btn btn-quiet btn-sm" id="copyBtn">📋 そのままコピー</button>
@@ -602,6 +610,7 @@ function migrate(){
     if(a.status!=='draft' && a.status!=='published') a.status='draft';
     if(typeof a.category!=='string') a.category='';
     if(a.deletedAt===undefined) a.deletedAt=null;
+    if(a.publishedAt===undefined) a.publishedAt=null;
     if(Array.isArray(a.phrases)){
       a.phrases.forEach(p=>{ if(p.text) notes.push({id:uid('n'),text:p.text,memo:p.text,think:''}); });
       delete a.phrases;
@@ -620,6 +629,8 @@ function migrate(){
 
 /* ===== 一覧 ===== */
 const fmt=ts=>{const d=new Date(ts);return `${d.getFullYear()}.${String(d.getMonth()+1).padStart(2,'0')}.${String(d.getDate()).padStart(2,'0')}`;};
+const toDateInput=ts=>{const d=new Date(ts);return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;};
+const fromDateInput=v=>{const [y,m,d]=v.split('-').map(Number);return new Date(y,m-1,d).getTime();};
 let listFilter={q:'',tag:null,cat:null,status:null,sort:'updated_desc'};
 const alive=()=>articles.filter(a=>!a.deletedAt);
 function allTags(){
@@ -685,7 +696,7 @@ function renderList(){
         <div class="meta">${fmt(a.updated)}　${chars(a.body)}字${a.category?'　📂 '+esc(a.category):''}</div>
         ${a.body.trim()?`<div class="excerpt">${esc(a.body.trim().slice(0,90))}</div>`:''}
         <div class="badges">
-          <span class="statuspill ${a.status==='published'?'published':''}">${a.status==='published'?'✅ 公開済み':'📝 下書き'}</span>
+          <span class="statuspill ${a.status==='published'?'published':''}">${a.status==='published'?'✅ 公開済み'+(a.publishedAt?' '+fmt(a.publishedAt):''):'📝 下書き'}</span>
           ${(a.tags||[]).map(t=>`<span class="tagpill">${esc(t)}</span>`).join('')}
         </div>
       </div>
@@ -757,7 +768,7 @@ $('cards').addEventListener('click',async e=>{
   const c=e.target.closest('.card'); if(c) openArticle(c.dataset.id);
 });
 $('newBtn').addEventListener('click',()=>{
-  const a={id:uid('a'),title:'',body:'',tags:[],category:'',status:'draft',deletedAt:null,created:Date.now(),updated:Date.now()};
+  const a={id:uid('a'),title:'',body:'',tags:[],category:'',status:'draft',publishedAt:null,deletedAt:null,created:Date.now(),updated:Date.now()};
   articles.push(a); queueSave(); openArticle(a.id);
 });
 
@@ -809,6 +820,9 @@ function setStatusToggle(status){
   const b=$('statusToggle');
   b.dataset.status=status;
   b.textContent = status==='published' ? '✅ 公開済み' : '📝 下書き';
+  $('pubDateWrap').hidden = status!=='published';
+  const a=cur();
+  $('pubDate').value = a && a.publishedAt ? toDateInput(a.publishedAt) : '';
 }
 function renderCategoryOptions(){
   $('categoryOptions').innerHTML=allCategories().map(c=>`<option value="${esc(c)}">`).join('');
@@ -875,7 +889,13 @@ $('categoryInput').addEventListener('input',e=>{
 $('statusToggle').addEventListener('click',()=>{
   const a=cur();
   a.status = a.status==='published' ? 'draft' : 'published';
+  if(a.status==='published' && !a.publishedAt) a.publishedAt=Date.now();
   setStatusToggle(a.status);
+  touch();
+});
+$('pubDate').addEventListener('change',e=>{
+  if(!e.target.value) return;
+  cur().publishedAt=fromDateInput(e.target.value);
   touch();
 });
 function updateStats(){
@@ -1079,7 +1099,7 @@ function renderNotes(){
           </div>`;}).join('')}
         <div class="foot">
           <button data-cpall>まとめてコピー</button>
-          ${n.doneAt?`<button data-done>↩ 未完了に戻す</button>`:`<button class="done-btn" data-done>✓ 完了</button>`}
+          ${n.doneAt?`<button data-done>↩ 未完了に戻す</button><label class="date-field">完了日 <input type="date" data-donedate value="${toDateInput(n.doneAt)}"></label>`:`<button class="done-btn" data-done>✓ 完了</button>`}
           <button class="rm" data-rm>🗑 削除</button>
         </div>
       </div>
@@ -1101,6 +1121,11 @@ function addNote(){
 }
 $('noteAdd').addEventListener('click',addNote);
 $('doneToggle').addEventListener('click',()=>{ showDone=!showDone; renderNotes(); });
+$('noteList').addEventListener('change',e=>{
+  const t=e.target; if(!t.hasAttribute('data-donedate') || !t.value) return;
+  notes.find(x=>x.id===t.closest('.note').dataset.id).doneAt=fromDateInput(t.value);
+  renderNotes(); queueSave();
+});
 $('noteInput').addEventListener('input',e=>autoGrow(e.target));
 $('noteInput').addEventListener('keydown',e=>{ if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing){ e.preventDefault(); addNote(); } });
 $('noteList').addEventListener('input',e=>{
