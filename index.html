@@ -94,6 +94,7 @@ main{max-width:900px;margin:0 auto;padding:18px 16px 70px}
 .tagchip:hover{border-color:var(--ink-mid);color:var(--ink)}
 .tagchip.active{background-color:var(--ink);color:var(--paper);border-color:var(--ink)}
 .bulkbar{display:flex;gap:8px;align-items:center;margin:-4px 0 14px;flex-wrap:wrap}
+.bulkbar[hidden]{display:none}
 .bulk-count{font-family:var(--mono);font-size:12px;color:var(--ink-mid)}
 .card .pick{margin-right:2px;margin-top:4px;flex:none}
 .card .actions{display:flex;gap:6px;flex:none}
@@ -222,9 +223,10 @@ html[data-theme="dark"] .status-toggle[data-status="published"]{border-color:#3E
   #notesDrawer .close{display:none}
   #notesBtn,#notesBtn2,.notes-fab{display:none}
   .scrim{display:none}
-  .drawer-resize{display:block;position:absolute;left:-4px;top:0;bottom:0;width:8px;cursor:col-resize;z-index:2}
-  .drawer-resize:hover,.drawer-resize.dragging{background:rgba(18,41,76,.12)}
-  html[data-theme="dark"] .drawer-resize:hover,html[data-theme="dark"] .drawer-resize.dragging{background:rgba(234,241,251,.12)}
+  .drawer-resize{display:block;position:absolute;left:-8px;top:0;bottom:0;width:16px;cursor:col-resize;z-index:2;touch-action:none}
+  .drawer-resize::after{content:"";position:absolute;left:5px;top:50%;width:6px;height:56px;margin-top:-28px;
+     border-radius:3px;background-color:var(--rule);border:1px solid var(--ink-soft)}
+  .drawer-resize:hover::after,.drawer-resize.dragging::after{background-color:var(--ink-mid);border-color:var(--ink-mid)}
 }
 
 @media(max-width:520px){
@@ -971,21 +973,24 @@ $('backupBtn').addEventListener('click',()=>{$('bkMsg').textContent='';openDrawe
   const saved=parseInt(localStorage.getItem(NOTES_WIDTH_KEY),10);
   if(saved>=MIN_W && saved<=MAX_W) drawer.style.width=saved+'px';
   let dragging=false, startX=0, startW=0;
-  handle.addEventListener('mousedown',e=>{
+  handle.addEventListener('pointerdown',e=>{
     dragging=true; startX=e.clientX; startW=drawer.getBoundingClientRect().width;
+    handle.setPointerCapture(e.pointerId);
     handle.classList.add('dragging'); document.body.style.userSelect='none';
     e.preventDefault();
   });
-  window.addEventListener('mousemove',e=>{
+  handle.addEventListener('pointermove',e=>{
     if(!dragging) return;
     const w=Math.min(MAX_W,Math.max(MIN_W,startW+(startX-e.clientX)));
     drawer.style.width=w+'px';
   });
-  window.addEventListener('mouseup',()=>{
+  const endDrag=()=>{
     if(!dragging) return;
     dragging=false; handle.classList.remove('dragging'); document.body.style.userSelect='';
     try{ localStorage.setItem(NOTES_WIDTH_KEY, Math.round(drawer.getBoundingClientRect().width)); }catch(e){}
-  });
+  };
+  handle.addEventListener('pointerup',endDrag);
+  handle.addEventListener('pointercancel',endDrag);
 })();
 
 /* ===== ネタ帳 ===== */
