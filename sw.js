@@ -1,4 +1,4 @@
-const CACHE_NAME = 'shitagaki-cho-v1';
+const CACHE_NAME = 'shitagaki-cho-v2';
 const CORE_ASSETS = ['./', './index.html', './manifest.json', './icon-512.png'];
 
 self.addEventListener('install', e => {
@@ -20,12 +20,9 @@ self.addEventListener('fetch', e => {
   if (e.request.method !== 'GET' || url.origin !== location.origin) return;
 
   e.respondWith(
-    caches.match(e.request).then(cached => {
-      const fetchPromise = fetch(e.request).then(res => {
-        if (res.ok) caches.open(CACHE_NAME).then(cache => cache.put(e.request, res.clone()));
-        return res;
-      }).catch(() => cached);
-      return cached || fetchPromise;
-    })
+    fetch(e.request).then(res => {
+      if (res.ok) caches.open(CACHE_NAME).then(cache => cache.put(e.request, res.clone()));
+      return res;
+    }).catch(() => caches.match(e.request))
   );
 });
