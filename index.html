@@ -519,7 +519,11 @@ function loadLocal(){
 function saveLocal(){
   try{
     localStorage.setItem(LOCAL_KEY, JSON.stringify({articles, notes, theme, updated: Date.now()}));
-  }catch(e){ /* 保存先が使えない場合は諦める（オンライン保存には影響しない） */ }
+    return true;
+  }catch(e){
+    warn('この端末に保存できませんでした（容量不足など）。ネットにつながっていない間の変更は、画面を閉じると消える可能性があります。「💾 バックアップ・復元」から書き出してください。');
+    return false;
+  }
 }
 function warn(msg){
   const bar=$('warnBar');
@@ -528,7 +532,13 @@ function warn(msg){
 function setCloudStatus(t){ $('cloudStatus').textContent=t; }
 
 let activeConfig = configFromUrl() || FIREBASE_CONFIG;
+let cloudIniting=false;
 async function initCloud(){
+  if(cloudIniting) return;
+  cloudIniting=true;
+  try{ await initCloudInner(); } finally{ cloudIniting=false; }
+}
+async function initCloudInner(){
   if(!activeConfig.apiKey || !activeConfig.databaseURL){
     setCloudStatus('Firebase未設定。この画面では保存されません。バックアップから書き出してください。');
     warn('保存先が未設定です。HTMLの先頭にFirebaseの設定を貼ると保存が有効になります。');
@@ -565,7 +575,7 @@ async function initCloud(){
     });
   }catch(e){
     setCloudStatus('保存先に接続できません（'+(e.message||e)+'）');
-    warn('保存先に接続できません。書いた内容はこの画面を閉じると消えます。');
+    warn('保存先に接続できません。書いた内容はこの端末に保存し、ネットにつながったら同期します。');
   }
 }
 $('authBtn').addEventListener('click',async()=>{
@@ -709,8 +719,8 @@ function renderList(){
   const list=filteredSorted();
   if(!list.length){ $('cards').innerHTML='<div class="empty"><p>🔍 条件に合う記事がありません。</p></div>'; return; }
   $('cards').innerHTML=list.map(a=>`
-    <div class="card" data-id="${a.id}">
-      ${selectMode?`<input type="checkbox" class="pick" data-pick="${a.id}" ${selected.has(a.id)?'checked':''}>`:''}
+    <div class="card" data-id="${esc(a.id)}">
+      ${selectMode?`<input type="checkbox" class="pick" data-pick="${esc(a.id)}" ${selected.has(a.id)?'checked':''}>`:''}
       <div>
         <h3>${esc(a.title||'無題の記事')}</h3>
         <div class="meta">${fmt(a.updated)}　${chars(a.body)}字${a.category?'　📂 '+esc(a.category):''}</div>
@@ -720,7 +730,7 @@ function renderList(){
           ${(a.tags||[]).map(t=>`<span class="tagpill">${esc(t)}</span>`).join('')}
         </div>
       </div>
-      ${selectMode?'':`<button class="del" data-del="${a.id}">🗑 削除</button>`}
+      ${selectMode?'':`<button class="del" data-del="${esc(a.id)}">🗑 削除</button>`}
     </div>`).join('');
 }
 $('searchInput').addEventListener('input',e=>{ listFilter.q=e.target.value; renderList(); });
@@ -751,7 +761,7 @@ $('bulkDelBtn').addEventListener('click',async()=>{
   if(await ask(`選択した${selected.size}件をゴミ箱に移動します。`)){
     articles.forEach(a=>{ if(selected.has(a.id)) a.deletedAt=Date.now(); });
     if(curId && selected.has(curId)) curId=null;
-    exitSelectMode(); renderList(); save();
+    exitSelectMode(); renderList(); saveNow();
   }
 });
 $('bulkTagBtn').addEventListener('click',()=>{
@@ -763,7 +773,7 @@ $('bulkTagBtn').addEventListener('click',()=>{
   articles.forEach(a=>{
     if(selected.has(a.id)) a.tags=[...new Set([...(a.tags||[]),...newTags])];
   });
-  exitSelectMode(); renderList(); save();
+  exitSelectMode(); renderList(); saveNow();
 });
 $('cards').addEventListener('click',async e=>{
   if(selectMode){
@@ -781,7 +791,7 @@ $('cards').addEventListener('click',async e=>{
     if(await ask(`「${a.title||'無題の記事'}」をゴミ箱に移動します。`)){
       a.deletedAt=Date.now();
       if(curId===id) curId=null;
-      renderList(); save();
+      renderList(); saveNow();
     }
     return;
   }
@@ -798,14 +808,14 @@ function renderTrash(){
   $('trashCount').textContent=trashed.length?trashed.length+'件':'';
   if(!trashed.length){ $('trashCards').innerHTML='<div class="empty"><p>🗑 ゴミ箱は空です。</p></div>'; return; }
   $('trashCards').innerHTML=trashed.map(a=>`
-    <div class="card" data-id="${a.id}">
+    <div class="card" data-id="${esc(a.id)}">
       <div>
         <h3>${esc(a.title||'無題の記事')}</h3>
         <div class="meta">${fmt(a.deletedAt)} 削除　${chars(a.body)}字</div>
       </div>
       <div class="actions">
-        <button class="restore" data-restore="${a.id}">↩️ 復元</button>
-        <button class="del" data-perma="${a.id}">🗑 完全削除</button>
+        <button class="restore" data-restore="${esc(a.id)}">↩️ 復元</button>
+        <button class="del" data-perma="${esc(a.id)}">🗑 完全削除</button>
       </div>
     </div>`).join('');
 }
@@ -813,7 +823,7 @@ $('trashCards').addEventListener('click',async e=>{
   const r=e.target.closest('[data-restore]');
   if(r){
     const a=articles.find(x=>x.id===r.dataset.restore);
-    if(a){ a.deletedAt=null; renderTrash(); renderList(); save(); }
+    if(a){ a.deletedAt=null; renderTrash(); renderList(); saveNow(); }
     return;
   }
   const p=e.target.closest('[data-perma]');
@@ -821,7 +831,7 @@ $('trashCards').addEventListener('click',async e=>{
     const id=p.dataset.perma, a=articles.find(x=>x.id===id);
     if(await ask(`「${a.title||'無題の記事'}」を完全に削除します。元に戻せません。`)){
       articles=articles.filter(x=>x.id!==id);
-      renderTrash(); save();
+      renderTrash(); saveNow();
     }
   }
 });
@@ -858,9 +868,16 @@ function openArticle(id){
   document.body.classList.add('editing');
   window.scrollTo(0,0);
 }
-async function flushSave(){
+/* すぐ保存する操作はすべてここを通す：端末に保存してから、クラウドへ送る */
+function saveNow(){
+  saveLocal();
   clearTimeout(saveTimer);
-  if(cloud.ready && cloud.user){ await save(); }
+  return save();
+}
+/* 画面を移る前の保存。端末には必ず保存し、クラウドは最大2.5秒だけ待つ
+   （オフラインだとクラウドの完了は通信が戻るまで来ないため、待ち続けない） */
+async function flushSave(){
+  await Promise.race([saveNow(), new Promise(r=>setTimeout(r,2500))]);
 }
 function goList(){
   curId=null; closeDrawer();
@@ -913,8 +930,7 @@ $('statusToggle').addEventListener('click',()=>{
   touch();
 });
 $('pubDate').addEventListener('change',e=>{
-  if(!e.target.value) return;
-  cur().publishedAt=fromDateInput(e.target.value);
+  cur().publishedAt = e.target.value ? fromDateInput(e.target.value) : null;
   touch();
 });
 /* 本文の文字の大きさ（端末ごとに記憶） */
@@ -1053,7 +1069,8 @@ $('backupBtn').addEventListener('click',()=>{$('bkMsg').textContent='';openDrawe
   const NOTES_WIDTH_KEY='shitagaki-notes-width';
   const MIN_W=300, MAX_W=640;
   const drawer=$('notesDrawer'), handle=$('notesResize');
-  const saved=parseInt(localStorage.getItem(NOTES_WIDTH_KEY),10);
+  let saved=NaN;
+  try{ saved=parseInt(localStorage.getItem(NOTES_WIDTH_KEY),10); }catch(e){}
   if(saved>=MIN_W && saved<=MAX_W) drawer.style.width=saved+'px';
   let dragging=false, startX=0, startW=0;
   handle.addEventListener('pointerdown',e=>{
@@ -1107,7 +1124,7 @@ function renderNotes(){
   const ordered=[...shown].filter(n=>!n.doneAt).reverse()
     .concat(shown.filter(n=>n.doneAt).sort((a,b)=>b.doneAt-a.doneAt));
   $('noteList').innerHTML=ordered.map(n=>{
-    return `<li class="note ${open.has(n.id)?'open':''} ${n.doneAt?'done':''}" data-id="${n.id}">
+    return `<li class="note ${open.has(n.id)?'open':''} ${n.doneAt?'done':''}" data-id="${esc(n.id)}">
       <div class="head" data-toggle>
         ${n.doneAt?'':'<span class="grip" data-grip title="ドラッグで並び替え">⠿</span>'}
         <span class="caret">▸</span>
@@ -1145,7 +1162,7 @@ function renderNotes(){
     </li>`;}).join('');
   if(focus){
     const [nid,key]=focus.split(':');
-    const li=$('noteList').querySelector(`.note[data-id="${nid}"]`);
+    const li=$('noteList').querySelector(`.note[data-id="${CSS.escape(nid)}"]`);
     const ta=li && li.querySelector(`textarea[data-field="${key}"]`);
     if(ta) ta.focus();
   }
@@ -1287,7 +1304,7 @@ $('noteList').addEventListener('click',e=>{
   else if(b.hasAttribute('data-done')){
     if(n.doneAt){ n.doneAt=null; renderNotes(); queueSave(); return; }
     completing.add(n.id); renderNotes();
-    const inp=$('noteList').querySelector(`.note[data-id="${n.id}"] [data-completedate]`);
+    const inp=$('noteList').querySelector(`.note[data-id="${CSS.escape(n.id)}"] [data-completedate]`);
     if(inp) inp.focus();
   }
   else if(b.hasAttribute('data-confirmdone')){
@@ -1328,7 +1345,7 @@ async function restore(text){
   }
   if(!await ask(`記事 ${data.articles.length}件 / ネタ ${data.notes.length}件 で置き換えます。今の内容は消えます。`)) return;
   articles=data.articles; notes=data.notes; curId=null; open.clear();
-  migrate(); renderList(); renderNotes(); saveLocal(); save();
+  migrate(); renderList(); renderNotes(); saveNow();
   $('viewEdit').hidden=true; $('viewList').hidden=false; $('backBtn').hidden=true;
   document.body.classList.remove('editing');
   $('bkMsg').textContent='復元しました';
@@ -1376,9 +1393,16 @@ initCloud();
 window.addEventListener('offline',()=>{
   warn('オフラインです。この端末には保存され続けます。オンラインに戻ると自動で同期されます。');
 });
-window.addEventListener('online',()=>{
+window.addEventListener('online',async()=>{
   warn('');
-  if(cloud.ready && cloud.user) save();
+  if(cloud.ready){ if(cloud.user) save(); return; }
+  await initCloud();
+  if(cloud.ready) return;
+  /* ブラウザは一度失敗した読み込みを覚えていて、同じページでは再試行できない。
+     書いた内容は端末に保存済みなので、ページを読み込み直して接続する（編集中なら一覧に戻るのを待つ） */
+  if(!curId){ saveLocal(); location.reload(); return; }
+  warn('ネットにつながりました。一覧に戻ると同期を始めます。');
+  const wait=setInterval(()=>{ if(!curId){ clearInterval(wait); saveLocal(); location.reload(); } },1000);
 });
 
 if('serviceWorker' in navigator){
