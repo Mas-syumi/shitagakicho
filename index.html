@@ -536,12 +536,19 @@ const inflight=new Set();  // いまクラウドへ送っている項目
 /* 起動時（またはアカウントを切り替えたとき）に端末にあった内容の指紋。
    クラウドと初めてそろえるとき、「その後この端末で変えたもの」を見分けるのに使う */
 let boot=new Map(), bootFromV1=false;
+const touched=new Set();   // 起動後に一度でも内容が変わった項目（元の内容に戻しても「変えた」とみなす）
 const V1_OWNER='shitagaki-v1-owner';   // 旧形式の端末データを、どのアカウントに移したか
 function takeBoot(fromV1){
-  boot=new Map(); bootFromV1=!!fromV1;
+  boot=new Map(); bootFromV1=!!fromV1; touched.clear();
   articles.forEach(a=>boot.set('a:'+a.id,fingerprint(a))); notes.forEach(n=>boot.set('n:'+n.id,fingerprint(n)));
 }
-const changedSinceBoot=(k,it)=>boot.get(k+':'+it.id)!==fingerprint(it);
+const changedSinceBoot=(k,it)=>touched.has(k+':'+it.id) || boot.get(k+':'+it.id)!==fingerprint(it);
+function markTouched(){
+  for(const k of ['a','n']) for(const it of listOf(k)){ const key=k+':'+it.id; if(!touched.has(key) && boot.get(key)!==fingerprint(it)) touched.add(key); }
+}
+/* 送信中だった項目（アプリを閉じても残す）。開き直したとき、手元に無ければ「送信中に消した」とみなす */
+let sendingPrev=new Set();
+const newGen=()=>Math.random().toString(36).slice(2,10)+Date.now().toString(36);
 function v1Owner(){ try{ return localStorage.getItem(V1_OWNER); }catch(e){ return null; } }
 function setV1Owner(u){ try{ if(!localStorage.getItem(V1_OWNER)) localStorage.setItem(V1_OWNER,u); }catch(e){} }
 const v1Allowed=u=>{ const o=v1Owner(); return !o || o===u; };
@@ -549,7 +556,7 @@ const v1Allowed=u=>{ const o=v1Owner(); return !o || o===u; };
 function norm(o){
   const r={};
   Object.keys(o).sort().forEach(k=>{
-    if(k==='rev') return;
+    if(k==='rev' || k==='g') return;   /* 版番号と「作り直した回の印」は中身の比較に含めない */
     const v=o[k];
     /* Firebase は null と空の配列を保存しないので、比べるときも同じにそろえる */
     if(v===null||v===undefined||(Array.isArray(v)&&!v.length)) return;
@@ -579,8 +586,9 @@ function loadLocal(o){
   try{ const raw=localStorage.getItem(LOCAL_V2+(o||'local')); return raw?JSON.parse(raw):null; }catch(e){ return null; }
 }
 function saveLocal(){
+  if(!initialSynced) markTouched();
   try{
-    localStorage.setItem(LOCAL_V2+(owner||'local'), JSON.stringify({articles, notes, theme, themeDirty, synced}));
+    localStorage.setItem(LOCAL_V2+(owner||'local'), JSON.stringify({articles, notes, theme, themeDirty, synced, sending:[...inflight, ...sendingPrev]}));
     localStorage.setItem(LAST_OWNER, owner||'local');
     return true;
   }catch(e){
@@ -593,6 +601,7 @@ function useData(d){
   notes=Array.isArray(d&&d.notes)?d.notes:[];
   synced=(d&&d.synced)||{};
   themeDirty=!!(d&&d.themeDirty);
+  sendingPrev=new Set((d&&Array.isArray(d.sending))?d.sending:[]);
   if(d&&d.theme) applyTheme(d.theme);
   migrate();
 }
@@ -717,7 +726,7 @@ function startSync(u){
           }
           else if(!await migrateFromV1(u,gen)) continue;
           if(gen!==syncGen) return;
-          initialSynced=true;
+          initialSynced=true; sendingPrev.clear(); saveLocal();
           flush();
         }else applySnapshot(S);
       }
@@ -733,7 +742,7 @@ function startSync(u){
     flush();
   }));
   unsubs.push(f.onValue(f.ref(cloud.db,V2_ROOT(u)), s=>{ if(gen!==syncGen) return; latest=s.val(); has=true; seen=true; pump(); },
-    e=>warn('クラウドから読み込めませんでした（'+(e.message||e)+'）')));
+    e=>{ if(gen===syncGen) warn('クラウドから読み込めませんでした（'+(e.message||e)+'）'); }));
 }
 
 /* 旧形式（記事一覧まるごと1か所）から、1件ずつの形式へ写す。旧データは消さずに残す。
@@ -781,24 +790,38 @@ async function migrateFromV1(u, gen){
 }
 
 /* この持ち主について、この端末がクラウドと初めてそろえるとき。
-   起動後にこの端末で変えていないものはクラウドの内容にし、変えたものは移行時点の版(rev 1)を土台に送る。
-   sentH は、この端末が移行で送った内容の指紋（送った後に変えたものを見分ける） */
+   ・起動後にこの端末で変えていないもの → クラウドの内容にする
+   ・変えたもの → 土台が分かるときだけ、その版を土台に送る。
+     土台はこの端末が移行で送った内容（sentH）か、起動時の内容がクラウドと同じだった場合の、そのクラウドの版。
+     分からないときは両方残す（送ると必ず「（別の端末の版）」ができる）
+   sentH は、この端末が移行で送った内容の指紋 */
 function adoptFirst(S, sentH){
   const srv={a:(S&&S.articles)||{}, n:(S&&S.notes)||{}}, has=(o,id)=>Object.prototype.hasOwnProperty.call(o,id);
   for(const k of ['a','n']){
     const list=listOf(k), ids=new Set(list.map(x=>x.id));
     for(const it of [...list]){
-      const key=k+':'+it.id, h=fingerprint(it), b=boot.get(key), sent=sentH&&sentH[key];
+      const key=k+':'+it.id, h=fingerprint(it), b=boot.get(key), sent=sentH?sentH[key]:undefined;
       if(has(srv[k],it.id)){
-        if(b===h || sent===h) synced[key]={rev:srv[k][it.id].rev||0, h};
-        else synced[key]={rev:1, h:sent||b||''};
+        const sv=srv[k][it.id], sh=fingerprint(fill(k,{...sv,id:it.id})), rev=sv.rev||0;
+        if(sent!==undefined) synced[key]={rev, h:sent, g:sv.g};                  /* クラウドは、いま送った内容 */
+        else if(!changedSinceBoot(k,it)) synced[key]={rev, h, g:sv.g};          /* 変えていない → クラウドの内容にする */
+        else if(sh===b) synced[key]={rev, h:b, g:sv.g};                          /* 起動時の内容 = クラウドの内容 → それを土台に送る */
+        else synced[key]={rev:-1, h:'', g:sv.g};                                 /* 土台が分からない → 両方残す */
       }
-      else if(b===h && bootFromV1) list.splice(list.indexOf(it),1);   /* 旧データの側では消えていた */
+      else if(!changedSinceBoot(k,it) && bootFromV1) list.splice(list.indexOf(it),1);   /* 旧データの側では消えていた */
     }
-    for(const [key,b] of boot) if(key[0]===k && !ids.has(key.slice(2)) && has(srv[k],key.slice(2))) synced[key]={rev:1, h:b};   /* この端末で消した */
+    for(const [key,b] of boot){                                                  /* この端末で消した */
+      const id=key.slice(2);
+      if(key[0]!==k || ids.has(id) || !has(srv[k],id)) continue;
+      const sv=srv[k][id], sent=sentH?sentH[key]:undefined;
+      if(sent!==undefined) synced[key]={rev:sv.rev||0, h:sent, g:sv.g};
+      else if(fingerprint(fill(k,{...sv,id}))===b) synced[key]={rev:sv.rev||0, h:b, g:sv.g};
+      /* クラウドの内容が起動時と違う → 消さずに、クラウドの内容を受け取る */
+    }
   }
-  takeBoot(false);
   applySnapshot(S);
+  takeBoot(false);
+  if(curId && !cur()){ goList(); warn('開いていた記事は、クラウドの内容にはありませんでした。'); }
   renderAll();
 }
 
@@ -813,21 +836,24 @@ function applySnapshot(S){
       const loc=byId.get(id);
       if(!loc){
         if(synced[key] || inflight.has(key)) continue;   /* この端末で削除して送信待ち・送信中。送るときに判断する */
-        list.push({...s, rev:sRev}); synced[key]={rev:sRev,h:sh};
+        if(sendingPrev.has(key)){ synced[key]={rev:sRev,h:sh,g:srv[k][id].g}; continue; }   /* 送信中に消してアプリを閉じた → 削除を送る */
+        list.push({...s, rev:sRev}); synced[key]={rev:sRev,h:sh,g:srv[k][id].g};
         if(k==='a') aChanged=true; else nChanged=true;
         continue;
       }
+      /* 送信中の項目は、送信の結果で判断する（送信中に元の内容へ戻した場合も「変えた」ままにするため） */
+      if(inflight.has(key)) continue;
       const lh=fingerprint(loc);
-      if(lh===sh){ synced[key]={rev:sRev,h:sh}; loc.rev=sRev; continue; }
+      if(lh===sh){ synced[key]={rev:sRev,h:sh,g:srv[k][id].g}; loc.rev=sRev; loc.g=srv[k][id].g; continue; }
       if(synced[key] && synced[key].h===lh){   /* この端末では変えていない → 向こうの内容にする */
-        list[list.indexOf(loc)]={...s, rev:sRev}; synced[key]={rev:sRev,h:sh};
+        list[list.indexOf(loc)]={...s, rev:sRev}; synced[key]={rev:sRev,h:sh,g:srv[k][id].g};
         if(k==='a'){ aChanged=true; if(id===curId) openChanged=true; } else nChanged=true;
       }
       /* 両方で変わっている → こちらを残す。送るときに rev を比べて両方残す */
     }
     for(const loc of [...list]){
       const key=k+':'+loc.id;
-      if(Object.prototype.hasOwnProperty.call(srv[k],loc.id)) continue;
+      if(Object.prototype.hasOwnProperty.call(srv[k],loc.id) || inflight.has(key)) continue;
       if(synced[key] && synced[key].h===fingerprint(loc)){   /* 他の端末で完全に削除された */
         list.splice(list.indexOf(loc),1); delete synced[key];
         if(k==='a'){ aChanged=true; if(loc.id===curId) openRemoved=true; } else nChanged=true;
@@ -846,7 +872,7 @@ function applySnapshot(S){
 
 function conflictCopy(k,s){
   const c={...s, id:uid(k)};
-  delete c.rev;
+  delete c.rev; delete c.g;
   if(k==='a') c.title=(s.title||'無題の記事')+'（別の端末の版）';
   else c.text=(s.text||'')+'（別の端末の版）';
   return c;
@@ -885,48 +911,55 @@ function flush(){
   p.then(()=>{ if(flushPromise===p){ flushPromise=null; if(flushAgain) flush(); } });
   return p;
 }
-/* gen が変わっていたら（アカウントの切り替えなど）、結果を今の状態に反映しない */
+/* gen が変わっていたら（アカウントの切り替えなど）、結果を今の状態に反映しない。
+   版番号(rev)に加えて「作り直した回の印」(g)も比べる。完全削除のあとに同じIDで作り直すと g が変わるので、
+   古い版を土台にした変更が、作り直した内容を上書きしない */
 async function pushOne(t,gen){
   const f=cloud.fns, r=f.ref(cloud.db, V2_ROOT(owner)+'/'+pathOf(t.k)+'/'+t.id);
-  const base=synced[t.key]?synced[t.key].rev:0;
+  const base=synced[t.key]?synced[t.key].rev:0, baseG=synced[t.key]?synced[t.key].g:undefined;
   if(t.remove){
-    const res=await f.runTransaction(r, c=>{ if(c===null) return null; if((c.rev||0)!==base) return; return null; }, {applyLocally:false});
+    const res=await f.runTransaction(r, c=>{ if(c===null) return null; if((c.rev||0)!==base || c.g!==baseG) return; return null; }, {applyLocally:false});
     if(gen!==syncGen) return;
     if(res.committed){ delete synced[t.key]; }
     else{   /* 削除する前に別の端末で変更されていた → 消さずに向こうの内容を戻す */
       const sv=res.snapshot.val();
-      if(sv){ const s=fill(t.k,{...sv,id:t.id}); listOf(t.k).push({...s,rev:sv.rev||0}); synced[t.key]={rev:sv.rev||0,h:fingerprint(s)}; sortNotes(); noteConflict(); }
+      if(sv){ const s=fill(t.k,{...sv,id:t.id}); listOf(t.k).push({...s,rev:sv.rev||0}); synced[t.key]={rev:sv.rev||0,h:fingerprint(s),g:sv.g}; sortNotes(); noteConflict(); }
     }
     saveLocal();
     return;
   }
   const item=listOf(t.k).find(x=>x.id===t.id); if(!item) return;
-  const sent=norm(item), h=fingerprint(item);
-  inflight.add(t.key);
+  const sent=norm(item), h=fingerprint(item), g0=newGen();
+  inflight.add(t.key); saveLocal();
   let res;
   try{
     res=await f.runTransaction(r, c=>{
-      if(c && (c.rev||0)!==base) return;   /* 別の端末が先に変えていた */
-      /* クラウドに無い（新しく作る・完全削除のあとに戻す）ときは、版番号を時刻から始める。
-         以前に同じIDで使われていた版番号と重ならないようにするため */
-      return {...sent, rev: c ? base+1 : Math.max(Date.now(), base+1)};
+      if(c && ((c.rev||0)!==base || c.g!==baseG)) return;   /* 別の端末が先に変えていた・作り直していた */
+      const o={...sent, rev:base+1};
+      const g = c ? c.g : g0;   /* クラウドに無い（新しく作る・完全削除のあとに戻す）ときは、新しい印を付ける */
+      if(g!==undefined) o.g=g;
+      return o;
     }, {applyLocally:false});
   }finally{ if(gen===syncGen) inflight.delete(t.key); }
   if(gen!==syncGen) return;
   const sv=res.snapshot.val();
   if(res.committed){
-    const nrev=(sv&&sv.rev)||base+1;
-    synced[t.key]={rev:nrev,h};
+    const nrev=(sv&&sv.rev)||base+1, ng=sv?sv.g:undefined;
+    synced[t.key]={rev:nrev,h,g:ng};
     const now=listOf(t.k).find(x=>x.id===t.id);
-    if(now) now.rev=nrev; else flushAgain=true;   /* 送っている間に消された → 続けて削除を送る */
+    if(now){ now.rev=nrev; if(ng!==undefined) now.g=ng; }
+    else flushAgain=true;   /* 送っている間に消された → 続けて削除を送る */
+    const cur2=now && fingerprint(now);
+    if(cur2 && cur2!==h) flushAgain=true;   /* 送っている間に変えた（元に戻した場合も含む）→ 続けて送る */
   }else if(sv){
     const s=fill(t.k,{...sv,id:t.id}), sh=fingerprint(s);
     const now=listOf(t.k).find(x=>x.id===t.id);
     if(sh===h || (now && sh===fingerprint(now))){
-      synced[t.key]={rev:sv.rev||0,h:sh};   /* 向こうも同じ内容にしていた → 複製しない */
+      synced[t.key]={rev:sv.rev||0,h:sh,g:sv.g};   /* 向こうも同じ内容にしていた → 複製しない */
+      if(now && sv.g!==undefined) now.g=sv.g;
     }else{
       listOf(t.k).push(conflictCopy(t.k,s));
-      synced[t.key]={rev:sv.rev||0,h:sh};   /* 次は向こうの版を土台に、こちらの内容を送る */
+      synced[t.key]={rev:sv.rev||0,h:sh,g:sv.g};   /* 次は向こうの版を土台に、こちらの内容を送る */
       sortNotes(); noteConflict();
     }
     flushAgain=true;
@@ -1101,7 +1134,9 @@ $('selectModeBtn').addEventListener('click',()=>{
 $('bulkCancelBtn').addEventListener('click',()=>{ exitSelectMode(); renderList(); });
 $('bulkDelBtn').addEventListener('click',async()=>{
   if(!selected.size) return;
+  const who=owner;
   if(await ask(`選択した${selected.size}件をゴミ箱に移動します。`)){
+    if(who!==owner) return;
     articles.forEach(a=>{ if(selected.has(a.id)) a.deletedAt=Date.now(); });
     if(curId && selected.has(curId)) curId=null;
     exitSelectMode(); renderList(); saveNow();
@@ -1129,10 +1164,12 @@ $('cards').addEventListener('click',async e=>{
   const d=e.target.closest('[data-del]');
   if(d){
     e.stopPropagation();
-    const id=d.dataset.del;
+    const id=d.dataset.del, who=owner;
     const a=articles.find(x=>x.id===id);
     if(await ask(`「${a.title||'無題の記事'}」をゴミ箱に移動します。`)){
-      a.deletedAt=Date.now();
+      /* 確認を待つ間に、同期で中身が入れ替わっていることがあるので、今の一覧から探し直す */
+      const now=who===owner && articles.find(x=>x.id===id); if(!now) return;
+      now.deletedAt=Date.now();
       if(curId===id) curId=null;
       renderList(); saveNow();
     }
@@ -1171,8 +1208,9 @@ $('trashCards').addEventListener('click',async e=>{
   }
   const p=e.target.closest('[data-perma]');
   if(p){
-    const id=p.dataset.perma, a=articles.find(x=>x.id===id);
+    const id=p.dataset.perma, a=articles.find(x=>x.id===id), who=owner;
     if(await ask(`「${a.title||'無題の記事'}」を完全に削除します。元に戻せません。`)){
+      if(who!==owner) return;
       articles=articles.filter(x=>x.id!==id);
       renderTrash(); saveNow();
     }
@@ -1622,9 +1660,10 @@ $('noteList').addEventListener('click',e=>{
   if(b.dataset.clearf!==undefined){
     const key=b.dataset.clearf;
     const label=FIELDS.find(f=>f.k===key).label;
+    const who=owner;
     ask(`「${label}」の中身を消します。元に戻せません。`).then(ok=>{
-      if(!ok) return;
-      n[key]=''; foldedFields.add(n.id+':'+key); openFields.delete(n.id+':'+key);
+      const now=ok && who===owner && notes.find(x=>x.id===n.id); if(!now) return;
+      now[key]=''; foldedFields.add(n.id+':'+key); openFields.delete(n.id+':'+key);
       renderNotes(); queueSave();
     });
     return;
@@ -1665,8 +1704,9 @@ $('noteList').addEventListener('click',e=>{
     completing.delete(n.id); renderNotes();
   }
   else if(b.hasAttribute('data-rm')){
+    const who=owner;
     ask('このネタを削除します。元に戻せません。').then(ok=>{
-      if(!ok) return;
+      if(!ok || who!==owner) return;
       notes=notes.filter(x=>x.id!==n.id); open.delete(n.id); renderNotes(); queueSave();
     });
   }
@@ -1702,9 +1742,11 @@ function checkBackup(data){
     strs.forEach(f=>{ if(!str(x[f])) bad.push(`${at}の「${f}」が文字ではありません`); });
     nums.forEach(f=>{ if(!num(x[f])) bad.push(`${at}の「${f}」が日時・数値ではありません`); });
     if(x.tags!==undefined && x.tags!==null && !(Array.isArray(x.tags) && x.tags.every(t=>typeof t==='string'))) bad.push(at+'のタグの形式が違います');
+    /* 古い形式の欄（読み込むときに今の形式へ直す） */
+    if(x.phrases!==undefined && x.phrases!==null && !(Array.isArray(x.phrases) && x.phrases.every(p=>isObj(p) && str(p.text)))) bad.push(at+'の古い形式の「フレーズ」が読めません');
   });
   check(data.articles,'記事',['title','body','category','status'],['created','updated','deletedAt','publishedAt']);
-  check(data.notes,'ネタ',['text','memo','think'],['doneAt','order']);
+  check(data.notes,'ネタ',['text','memo','think','phrase','points'],['doneAt','order']);
   return bad;
 }
 async function restore(text){
@@ -1718,9 +1760,17 @@ async function restore(text){
     $('bkMsg').textContent='復元しませんでした。内容に問題があります：'+bad.slice(0,3).join('／')+(bad.length>3?`　ほか${bad.length-3}件`:'');
     return;
   }
-  if(!await ask(`記事 ${data.articles.length}件 / ネタ ${data.notes.length}件 で置き換えます。今の内容は消えます。`)) return;
-  articles=data.articles; notes=data.notes; curId=null; open.clear();
-  migrate(); renderList(); renderNotes(); saveNow();
+  /* 今の形式への変換も、今の内容を置き換える前に済ませる */
+  const keepA=articles, keepN=notes;
+  let newA, newN;
+  try{ articles=data.articles; notes=data.notes; migrate(); newA=articles; newN=notes; }
+  catch(e){ $('bkMsg').textContent='復元しませんでした。内容を今の形式に直せませんでした（'+(e.message||e)+'）'; return; }
+  finally{ articles=keepA; notes=keepN; }
+  const who=owner;
+  if(!await ask(`記事 ${newA.length}件 / ネタ ${newN.length}件 で置き換えます。今の内容は消えます。`)) return;
+  if(who!==owner){ $('bkMsg').textContent='確認の間にアカウントが切り替わったため、復元しませんでした'; return; }
+  articles=newA; notes=newN; curId=null; open.clear();
+  renderList(); renderNotes(); saveNow();
   $('viewEdit').hidden=true; $('viewList').hidden=false; $('backBtn').hidden=true;
   document.body.classList.remove('editing');
   $('bkMsg').textContent='復元しました';
