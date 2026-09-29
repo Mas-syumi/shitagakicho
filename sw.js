@@ -1,4 +1,7 @@
-const CACHE_NAME = 'shitagaki-cho-v2';
+/* 同じ mas-syumi.github.io の別アプリと控え(キャッシュ)の置き場を共有しているので、
+   消す・探すのは必ずこのアプリの名前が付いたものだけにする */
+const CACHE_PREFIX = 'shitagaki-cho-';
+const CACHE_NAME = CACHE_PREFIX + 'v2';
 const CORE_ASSETS = ['./', './index.html', './manifest.json', './icon-512.png'];
 
 self.addEventListener('install', e => {
@@ -10,7 +13,7 @@ self.addEventListener('install', e => {
 self.addEventListener('activate', e => {
   e.waitUntil(
     caches.keys().then(keys =>
-      Promise.all(keys.filter(k => k !== CACHE_NAME).map(k => caches.delete(k)))
+      Promise.all(keys.filter(k => k.startsWith(CACHE_PREFIX) && k !== CACHE_NAME).map(k => caches.delete(k)))
     ).then(() => self.clients.claim())
   );
 });
@@ -26,6 +29,6 @@ self.addEventListener('fetch', e => {
         e.waitUntil(caches.open(CACHE_NAME).then(cache => cache.put(e.request, copy)));
       }
       return res;
-    }).catch(() => caches.match(e.request))
+    }).catch(() => caches.open(CACHE_NAME).then(cache => cache.match(e.request)))
   );
 });
