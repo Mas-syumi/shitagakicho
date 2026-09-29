@@ -162,7 +162,9 @@ html[data-theme="dark"] .status-toggle[data-status="published"]{border-color:#3E
 .note .grip{flex:none;cursor:grab;touch-action:none;color:var(--ink-soft);font-size:18px;line-height:1;
       padding:3px 6px;margin:-2px -4px -2px -6px;-webkit-user-select:none;user-select:none}
 .note .grip:hover{color:var(--ink)}
-.note.dragging{border-color:var(--ink-mid);box-shadow:0 4px 14px rgba(10,26,52,.25);position:relative;z-index:2}
+.note.sorting{transition:transform .18s ease;position:relative}
+.note.dragging{border-color:var(--ink-mid);box-shadow:0 6px 18px rgba(10,26,52,.28);z-index:3;transition:none;will-change:transform}
+@media (prefers-reduced-motion:reduce){.note.sorting{transition:none}}
 .note.dragging .grip{cursor:grabbing}
 .note.open .caret{transform:rotate(90deg)}
 .note .txt{font-size:15px;font-weight:500;line-height:1.7;word-break:break-word;white-space:pre-wrap}
@@ -1161,35 +1163,61 @@ $('doneToggle').addEventListener('click',()=>{ showDone=!showDone; renderNotes()
 
 /* ネタの並び替え（⠿をつかんで上下に動かす。マウス・指の両方） */
 (function(){
+  /* ドラッグ中は並び順のDOMを動かさず、transformだけで見た目を動かす。
+     つかんだネタは指に合わせて動き、他のネタは空いた場所へすっと移動する。離したときに順番を確定する */
   const list=$('noteList');
   let drag=null;
+  function update(){
+    if(!drag) return;
+    const dy=Math.min(drag.maxDy, Math.max(drag.minDy, drag.lastY-drag.startY+(drag.sc.scrollTop-drag.startScroll)));
+    drag.li.style.transform=`translateY(${dy}px)`;
+    const c=drag.mids[drag.from]+dy;
+    let to=0;
+    drag.mids.forEach((m,i)=>{ if(i!==drag.from && m<c) to++; });
+    drag.to=to;
+    drag.items.forEach((el,i)=>{
+      if(i===drag.from) return;
+      const s = (i>drag.from && i<=to) ? -drag.shift : (i<drag.from && i>=to) ? drag.shift : 0;
+      el.style.transform = s ? `translateY(${s}px)` : '';
+    });
+  }
+  function autoScroll(){
+    if(!drag) return;
+    const r=drag.sc.getBoundingClientRect(), y=drag.lastY;
+    const v = y<r.top+48 ? -Math.ceil((r.top+48-y)/4) : y>r.bottom-48 ? Math.ceil((y-(r.bottom-48))/4) : 0;
+    if(v){ drag.sc.scrollTop+=v; update(); }
+    drag.raf=requestAnimationFrame(autoScroll);
+  }
   list.addEventListener('pointerdown',e=>{
     const g=e.target.closest('[data-grip]'); if(!g) return;
     e.preventDefault();
     g.setPointerCapture(e.pointerId);
-    drag={li:g.closest('.note'), moved:false};
-    drag.li.classList.add('dragging'); document.body.style.userSelect='none';
+    const li=g.closest('.note'), items=[...list.querySelectorAll('.note:not(.done)')];
+    const rects=items.map(el=>el.getBoundingClientRect()), from=items.indexOf(li);
+    const gap=rects.length>1 ? rects[1].top-rects[0].bottom : 8;
+    const sc=list.closest('.body');
+    drag={li, items, from, to:from, mids:rects.map(r=>r.top+r.height/2),
+      shift:rects[from].height+gap, minDy:rects[0].top-rects[from].top-1, maxDy:rects[rects.length-1].bottom-rects[from].bottom+1,
+      startY:e.clientY, lastY:e.clientY, sc, startScroll:sc.scrollTop};
+    items.forEach(el=>el.classList.add('sorting'));
+    li.classList.add('dragging'); document.body.style.userSelect='none';
+    drag.raf=requestAnimationFrame(autoScroll);
   });
   list.addEventListener('pointermove',e=>{
     if(!drag) return;
-    const sc=list.closest('.body'), r=sc.getBoundingClientRect();
-    if(e.clientY<r.top+40) sc.scrollTop-=12; else if(e.clientY>r.bottom-40) sc.scrollTop+=12;
-    /* つかんでいるネタ自体は動かさず、隣のネタを入れ替える（動かすと指やマウスとのつながりが切れるため） */
-    const mid=el=>{ const b=el.getBoundingClientRect(); return b.top+b.height/2; };
-    const movable=el=>el && el.classList.contains('note') && !el.classList.contains('done');
-    let prev=drag.li.previousElementSibling, next=drag.li.nextElementSibling;
-    while(movable(prev) && e.clientY<mid(prev)){ drag.li.after(prev); drag.moved=true; prev=drag.li.previousElementSibling; }
-    while(movable(next) && e.clientY>mid(next)){ drag.li.before(next); drag.moved=true; next=drag.li.nextElementSibling; }
+    drag.lastY=e.clientY; update();
   });
   const endDrag=()=>{
     if(!drag) return;
-    const moved=drag.moved;
-    drag.li.classList.remove('dragging'); document.body.style.userSelect=''; drag=null;
-    if(moved){
+    const {from,to,items}=drag;
+    cancelAnimationFrame(drag.raf);
+    document.body.style.userSelect=''; drag=null;
+    if(to!==from){
       /* 画面は新しい順（配列の逆順）なので、並べた順を逆にして配列に戻す */
       const byId=new Map(notes.map(n=>[n.id,n]));
-      const active=[...list.querySelectorAll('.note:not(.done)')].map(x=>byId.get(x.dataset.id)).reverse();
-      notes=[...active, ...notes.filter(n=>n.doneAt)];
+      const shown=items.map(el=>byId.get(el.dataset.id));
+      const [moved]=shown.splice(from,1); shown.splice(to,0,moved);
+      notes=[...shown.reverse(), ...notes.filter(n=>n.doneAt)];
       queueSave();
     }
     renderNotes();
