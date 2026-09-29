@@ -503,8 +503,8 @@ function applyTheme(t){
 }
 applyTheme(matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light');
 $('themeBtn').addEventListener('click',()=>{
-  applyTheme(theme==='dark'?'light':'dark'); saveLocal();
-  if(cloud.user && initialSynced){ const f=cloud.fns; f.set(f.ref(cloud.db,V2_ROOT(owner)+'/meta/theme'),theme).catch(()=>{}); }
+  applyTheme(theme==='dark'?'light':'dark');
+  themeDirty=true; saveLocal(); flush();
 });
 
 /* ===== 保存先（Firebase） ===== */
@@ -530,7 +530,21 @@ let syncFor=null;          // 同期を始めた uid（ログイン状態の通�
 let unsubs=[];
 let flushPromise=null, flushAgain=false;
 let noteDragging=false;
-const bootIds=new Set();   // 起動時に端末にあった項目（移行のとき、起動後に作った項目だけを残すため）
+let syncGen=0;             // 同期を始め直すたびに増やす。古い同期の処理が終わっても、今の状態に触れないようにする
+let themeDirty=false;      // テーマを変えて、まだクラウドに送っていない
+const inflight=new Set();  // いまクラウドへ送っている項目
+/* 起動時（またはアカウントを切り替えたとき）に端末にあった内容の指紋。
+   クラウドと初めてそろえるとき、「その後この端末で変えたもの」を見分けるのに使う */
+let boot=new Map(), bootFromV1=false;
+const V1_OWNER='shitagaki-v1-owner';   // 旧形式の端末データを、どのアカウントに移したか
+function takeBoot(fromV1){
+  boot=new Map(); bootFromV1=!!fromV1;
+  articles.forEach(a=>boot.set('a:'+a.id,fingerprint(a))); notes.forEach(n=>boot.set('n:'+n.id,fingerprint(n)));
+}
+const changedSinceBoot=(k,it)=>boot.get(k+':'+it.id)!==fingerprint(it);
+function v1Owner(){ try{ return localStorage.getItem(V1_OWNER); }catch(e){ return null; } }
+function setV1Owner(u){ try{ if(!localStorage.getItem(V1_OWNER)) localStorage.setItem(V1_OWNER,u); }catch(e){} }
+const v1Allowed=u=>{ const o=v1Owner(); return !o || o===u; };
 
 function norm(o){
   const r={};
@@ -566,7 +580,7 @@ function loadLocal(o){
 }
 function saveLocal(){
   try{
-    localStorage.setItem(LOCAL_V2+(owner||'local'), JSON.stringify({articles, notes, theme, synced}));
+    localStorage.setItem(LOCAL_V2+(owner||'local'), JSON.stringify({articles, notes, theme, themeDirty, synced}));
     localStorage.setItem(LAST_OWNER, owner||'local');
     return true;
   }catch(e){
@@ -578,6 +592,7 @@ function useData(d){
   articles=Array.isArray(d&&d.articles)?d.articles:[];
   notes=Array.isArray(d&&d.notes)?d.notes:[];
   synced=(d&&d.synced)||{};
+  themeDirty=!!(d&&d.themeDirty);
   if(d&&d.theme) applyTheme(d.theme);
   migrate();
 }
@@ -591,7 +606,7 @@ function pendingChanges(){
   return out;
 }
 function showSaved(){
-  const n=pendingChanges().length;
+  const n=pendingChanges().length+(themeDirty?1:0);
   if(!cloud.user){ $('savedNote').textContent = n ? '✓ 端末に保存' : ''; return; }
   if(n && (!cloud.connected || !initialSynced)){ $('savedNote').textContent='✓ 端末に保存（未送信 '+n+'件）'; return; }
   if(!n){ const t=new Date(); $('savedNote').textContent='✓ 保存 '+String(t.getHours()).padStart(2,'0')+':'+String(t.getMinutes()).padStart(2,'0'); }
@@ -649,83 +664,142 @@ $('authBtn').addEventListener('click',async()=>{
     if(cloud.user){ await f.signOut(f.authObj); return; }
     const provider=new f.GoogleAuthProvider();
     try{ await f.signInWithPopup(f.authObj,provider); }
-    catch(e){ await f.signInWithRedirect(f.authObj,provider); }
+    catch(e){
+      /* 自分でログインの画面を閉じたときは何もしない。画面を出せなかったときだけ、ページごと移る方法にする */
+      if(e && (e.code==='auth/popup-closed-by-user' || e.code==='auth/cancelled-popup-request')) return;
+      if(e && (e.code==='auth/popup-blocked' || e.code==='auth/operation-not-supported-in-this-environment')){
+        await f.signInWithRedirect(f.authObj,provider); return;
+      }
+      throw e;
+    }
   }catch(e){ warn('ログインできませんでした（'+(e.message||e)+'）'); }
 });
 
 function stopSync(){
   unsubs.forEach(fn=>{ try{ fn(); }catch(e){} });
   unsubs=[]; initialSynced=false; cloud.connected=false;
+  syncGen++; flushPromise=null; flushAgain=false; inflight.clear();
 }
 function startSync(u){
   stopSync();
-  const f=cloud.fns;
+  const f=cloud.fns, gen=syncGen;
   if(owner!==u){
+    if(owner!==null) saveLocal();   /* 前の持ち主の分を、その持ち主の場所に保存しておく */
+    let switched=true;
     const d=loadLocal(u);
-    if(d) useData(d);
-    else if(owner!==null) useData(null);   /* 別のアカウントのデータは引き継がない */
-    /* owner が null（未ログインで使っていた／旧形式から移行）のときは、今の内容を未送信として持ち込む */
+    if(d){ useData(d); takeBoot(false); }
+    else if(owner!==null){ useData(null); takeBoot(false); }   /* 別のアカウントのデータは引き継がない */
+    else if(bootFromV1 && !v1Allowed(u)){
+      /* 旧形式の端末データは別のアカウントのもの。起動後にこの端末で書いたものだけを持ち込む */
+      articles=articles.filter(a=>changedSinceBoot('a',a)); notes=notes.filter(n=>changedSinceBoot('n',n));
+      synced={}; takeBoot(false);
+    }
+    else{
+      /* owner が null（未ログインで使っていた／旧形式から移行）のときは、今の内容を未送信として持ち込む */
+      switched=false;
+      if(bootFromV1) setV1Owner(u);
+    }
     owner=u; saveLocal();
+    if(switched){ goList(); open.clear(); openFields.clear(); exitSelectMode(); }
     renderAll();
   }
-  let busy=false, has=false, latest=null;
+  let busy=false, has=false, latest=null, seen=false;
   const pump=async()=>{
     if(busy) return; busy=true;
     try{
-      while(has){
+      while(has && gen===syncGen){
         const S=latest; has=false;
         if(!initialSynced){
-          if(!(S && S.meta && S.meta.migratedAt)) await migrateFromV1(u, S);
-          else applySnapshot(S);
+          const done=S && S.meta && S.meta.migratedAt;
+          if(done || (S && (S.articles||S.notes))){
+            if(Object.keys(synced).length) applySnapshot(S); else adoptFirst(S,null);
+            if(!done) await f.update(f.ref(cloud.db,V2_ROOT(u)+'/meta'),{migratedAt:Date.now()});
+          }
+          else if(!await migrateFromV1(u,gen)) continue;
+          if(gen!==syncGen) return;
           initialSynced=true;
           flush();
         }else applySnapshot(S);
       }
-    }catch(e){ warn('同期できませんでした（'+(e.message||e)+'）。この端末には保存されています。'); }
-    finally{ busy=false; }
+    }catch(e){ if(gen===syncGen) warn('同期できませんでした（'+(e.message||e)+'）。この端末には保存されています。'); }
+    finally{ if(gen===syncGen) busy=false; }
   };
   unsubs.push(f.onValue(f.ref(cloud.db,'.info/connected'), s=>{
+    if(gen!==syncGen) return;
     cloud.connected=!!s.val();
-    if(cloud.connected) flush(); else showSaved();
+    if(!cloud.connected){ showSaved(); return; }
+    /* 最初の取り込み（移行）が通信の切断で失敗していたら、つながり直したときにやり直す */
+    if(!initialSynced && seen && !busy){ has=true; pump(); }
+    flush();
   }));
-  unsubs.push(f.onValue(f.ref(cloud.db,V2_ROOT(u)), s=>{ latest=s.val(); has=true; pump(); },
+  unsubs.push(f.onValue(f.ref(cloud.db,V2_ROOT(u)), s=>{ if(gen!==syncGen) return; latest=s.val(); has=true; seen=true; pump(); },
     e=>warn('クラウドから読み込めませんでした（'+(e.message||e)+'）')));
 }
 
-/* 旧形式（記事一覧まるごと1か所）から、1件ずつの形式へ写す。旧データは消さずに残す */
-async function migrateFromV1(u, S){
+/* 旧形式（記事一覧まるごと1か所）から、1件ずつの形式へ写す。旧データは消さずに残す。
+   移行済みの印とデータは1回のトランザクションでまとめて書き、別の端末が先に移行していたら書かない。
+   終わったら true。別の端末が移行を済ませていたときは false（その内容を次に受け取ってそろえる） */
+async function migrateFromV1(u, gen){
   const f=cloud.fns;
-  if(S && (S.articles||S.notes)){   /* 別の端末が移行を済ませかけている */
-    applySnapshot(S);
-    await f.update(f.ref(cloud.db,V2_ROOT(u)+'/meta'),{migratedAt:Date.now()});
-    return;
-  }
-  let old=null, v1=null;
   const snap=await f.get(f.ref(cloud.db,V1_PATH(u)));
-  old=snap.exists()?snap.val():null;
-  try{ const raw=localStorage.getItem(LOCAL_V1); v1=raw?JSON.parse(raw):null; }catch(e){}
+  if(gen!==syncGen) return false;
+  const old=snap.exists()?snap.val():null;
+  let v1=null;
+  if(v1Allowed(u)){ try{ const raw=localStorage.getItem(LOCAL_V1); v1=raw?JSON.parse(raw):null; }catch(e){} }
   /* 旧版でクラウドに届いていなかった端末の変更があれば、そちらを元にする（旧版と同じ判断） */
   const base = (v1 && (v1.updated||0) > ((old&&old.updated)||0)) ? v1 : old;
+  /* 移行する内容：元データに、この端末で起動後に変えた・作った・消したものを重ねる */
+  let mA=[], mN=[];
   if(base){
-    const fresh=[...articles.filter(a=>!bootIds.has('a:'+a.id))], freshN=[...notes.filter(n=>!bootIds.has('n:'+n.id))];
+    const keepA=articles, keepN=notes;
     articles=Array.isArray(base.articles)?base.articles.filter(Boolean):[];
     notes=Array.isArray(base.notes)?base.notes.filter(Boolean):[];
-    notes.forEach((n,i)=>{ if(typeof n.order!=='number') n.order=i; });
-    /* 起動してから移行が終わるまでに作ったものは残す */
-    fresh.forEach(a=>{ if(!articles.some(x=>x.id===a.id)) articles.push(a); });
-    freshN.forEach(n=>{ if(!notes.some(x=>x.id===n.id)) notes.push(n); });
-    if(base.theme) applyTheme(base.theme);
+    migrate(); mA=articles; mN=notes;
+    articles=keepA; notes=keepN;
   }
-  migrate();
-  const upd={'meta/migratedAt':Date.now(),'meta/theme':theme};
-  articles.forEach(a=>{ upd['articles/'+a.id]={...norm(a),rev:1}; });
-  notes.forEach(n=>{ upd['notes/'+n.id]={...norm(n),rev:1}; });
-  await f.update(f.ref(cloud.db,V2_ROOT(u)), upd);
-  synced={};
-  articles.forEach(a=>{ a.rev=1; synced['a:'+a.id]={rev:1,h:fingerprint(a)}; });
-  notes.forEach(n=>{ n.rev=1; synced['n:'+n.id]={rev:1,h:fingerprint(n)}; });
-  saveLocal(); renderAll();
-  if(curId){ if(cur()) refreshOpenArticle(); else goList(); }
+  for(const [k,m] of [['a',mA],['n',mN]]){
+    const list=listOf(k), ids=new Set(list.map(x=>x.id));
+    for(const key of boot.keys()) if(key[0]===k && !ids.has(key.slice(2))){ const i=m.findIndex(x=>x.id===key.slice(2)); if(i>=0) m.splice(i,1); }
+    for(const it of list){
+      const i=m.findIndex(x=>x.id===it.id);
+      if(changedSinceBoot(k,it) || !base || (i<0 && !bootFromV1)){ if(i>=0) m[i]=it; else m.push(it); }
+    }
+  }
+  const tree={meta:{migratedAt:Date.now(), theme:(themeDirty||!base||!base.theme)?theme:base.theme}, articles:{}, notes:{}};
+  const sentH={};
+  mA.forEach(a=>{ tree.articles[a.id]={...norm(a),rev:1}; sentH['a:'+a.id]=fingerprint(a); });
+  mN.forEach(n=>{ tree.notes[n.id]={...norm(n),rev:1}; sentH['n:'+n.id]=fingerprint(n); });
+  const res=await f.runTransaction(f.ref(cloud.db,V2_ROOT(u)), c=>{
+    if(c && ((c.meta&&c.meta.migratedAt) || c.articles || c.notes)) return;   /* 別の端末が先に移行した */
+    return tree;
+  }, {applyLocally:false});
+  if(gen!==syncGen) return false;
+  if(!res.committed) return false;
+  if(v1) setV1Owner(u);
+  adoptFirst(tree, sentH);
+  return true;
+}
+
+/* この持ち主について、この端末がクラウドと初めてそろえるとき。
+   起動後にこの端末で変えていないものはクラウドの内容にし、変えたものは移行時点の版(rev 1)を土台に送る。
+   sentH は、この端末が移行で送った内容の指紋（送った後に変えたものを見分ける） */
+function adoptFirst(S, sentH){
+  const srv={a:(S&&S.articles)||{}, n:(S&&S.notes)||{}}, has=(o,id)=>Object.prototype.hasOwnProperty.call(o,id);
+  for(const k of ['a','n']){
+    const list=listOf(k), ids=new Set(list.map(x=>x.id));
+    for(const it of [...list]){
+      const key=k+':'+it.id, h=fingerprint(it), b=boot.get(key), sent=sentH&&sentH[key];
+      if(has(srv[k],it.id)){
+        if(b===h || sent===h) synced[key]={rev:srv[k][it.id].rev||0, h};
+        else synced[key]={rev:1, h:sent||b||''};
+      }
+      else if(b===h && bootFromV1) list.splice(list.indexOf(it),1);   /* 旧データの側では消えていた */
+    }
+    for(const [key,b] of boot) if(key[0]===k && !ids.has(key.slice(2)) && has(srv[k],key.slice(2))) synced[key]={rev:1, h:b};   /* この端末で消した */
+  }
+  takeBoot(false);
+  applySnapshot(S);
+  renderAll();
 }
 
 /* クラウドの最新の内容を取り込む。この端末で変えていない項目だけを置き換える */
@@ -738,7 +812,7 @@ function applySnapshot(S){
       const key=k+':'+id, sRev=srv[k][id].rev||0, s=fill(k,{...srv[k][id], id}), sh=fingerprint(s);
       const loc=byId.get(id);
       if(!loc){
-        if(synced[key]) continue;          /* この端末で完全削除して送信待ち。送るときに判断する */
+        if(synced[key] || inflight.has(key)) continue;   /* この端末で削除して送信待ち・送信中。送るときに判断する */
         list.push({...s, rev:sRev}); synced[key]={rev:sRev,h:sh};
         if(k==='a') aChanged=true; else nChanged=true;
         continue;
@@ -760,7 +834,7 @@ function applySnapshot(S){
       }
     }
   }
-  if(S && S.meta && S.meta.theme && S.meta.theme!==theme) applyTheme(S.meta.theme);
+  if(!themeDirty && S && S.meta && S.meta.theme && S.meta.theme!==theme) applyTheme(S.meta.theme);
   sortNotes();
   saveLocal();
   if(aChanged){ renderList(); if(!$('viewTrash').hidden) renderTrash(); }
@@ -786,14 +860,22 @@ function noteConflict(){
 function flush(){
   if(!cloud.user || !initialSynced || !cloud.connected){ showSaved(); return Promise.resolve(); }
   if(flushPromise){ flushAgain=true; return flushPromise; }
+  const gen=syncGen;
   const p=(async()=>{
     try{
       do{
         flushAgain=false;
-        for(const t of pendingChanges()) await pushOne(t);
+        for(const t of pendingChanges()){ await pushOne(t,gen); if(gen!==syncGen) return; }
+        if(themeDirty){
+          const f=cloud.fns, t=theme;
+          await f.set(f.ref(cloud.db,V2_ROOT(owner)+'/meta/theme'),t);
+          if(gen!==syncGen) return;
+          if(theme===t){ themeDirty=false; saveLocal(); } else flushAgain=true;
+        }
       }while(flushAgain);
       showSaved();
     }catch(e){
+      if(gen!==syncGen) return;
       $('savedNote').textContent='保存できません';
       warn('クラウドに保存できませんでした（'+(e.message||e)+'）。この端末には保存されています。');
     }
@@ -803,11 +885,13 @@ function flush(){
   p.then(()=>{ if(flushPromise===p){ flushPromise=null; if(flushAgain) flush(); } });
   return p;
 }
-async function pushOne(t){
+/* gen が変わっていたら（アカウントの切り替えなど）、結果を今の状態に反映しない */
+async function pushOne(t,gen){
   const f=cloud.fns, r=f.ref(cloud.db, V2_ROOT(owner)+'/'+pathOf(t.k)+'/'+t.id);
   const base=synced[t.key]?synced[t.key].rev:0;
   if(t.remove){
     const res=await f.runTransaction(r, c=>{ if(c===null) return null; if((c.rev||0)!==base) return; return null; }, {applyLocally:false});
+    if(gen!==syncGen) return;
     if(res.committed){ delete synced[t.key]; }
     else{   /* 削除する前に別の端末で変更されていた → 消さずに向こうの内容を戻す */
       const sv=res.snapshot.val();
@@ -818,23 +902,35 @@ async function pushOne(t){
   }
   const item=listOf(t.k).find(x=>x.id===t.id); if(!item) return;
   const sent=norm(item), h=fingerprint(item);
-  const res=await f.runTransaction(r, c=>{
-    if(c && (c.rev||0)!==base) return;   /* 別の端末が先に変えていた */
-    return {...sent, rev:base+1};
-  }, {applyLocally:false});
+  inflight.add(t.key);
+  let res;
+  try{
+    res=await f.runTransaction(r, c=>{
+      if(c && (c.rev||0)!==base) return;   /* 別の端末が先に変えていた */
+      /* クラウドに無い（新しく作る・完全削除のあとに戻す）ときは、版番号を時刻から始める。
+         以前に同じIDで使われていた版番号と重ならないようにするため */
+      return {...sent, rev: c ? base+1 : Math.max(Date.now(), base+1)};
+    }, {applyLocally:false});
+  }finally{ if(gen===syncGen) inflight.delete(t.key); }
+  if(gen!==syncGen) return;
+  const sv=res.snapshot.val();
   if(res.committed){
-    synced[t.key]={rev:base+1,h};
-    const now=listOf(t.k).find(x=>x.id===t.id); if(now) now.rev=base+1;
-  }else{
-    const sv=res.snapshot.val();
-    if(sv){
-      const s=fill(t.k,{...sv,id:t.id});
+    const nrev=(sv&&sv.rev)||base+1;
+    synced[t.key]={rev:nrev,h};
+    const now=listOf(t.k).find(x=>x.id===t.id);
+    if(now) now.rev=nrev; else flushAgain=true;   /* 送っている間に消された → 続けて削除を送る */
+  }else if(sv){
+    const s=fill(t.k,{...sv,id:t.id}), sh=fingerprint(s);
+    const now=listOf(t.k).find(x=>x.id===t.id);
+    if(sh===h || (now && sh===fingerprint(now))){
+      synced[t.key]={rev:sv.rev||0,h:sh};   /* 向こうも同じ内容にしていた → 複製しない */
+    }else{
       listOf(t.k).push(conflictCopy(t.k,s));
-      synced[t.key]={rev:sv.rev||0,h:fingerprint(s)};   /* 次は向こうの版を土台に、こちらの内容を送る */
+      synced[t.key]={rev:sv.rev||0,h:sh};   /* 次は向こうの版を土台に、こちらの内容を送る */
       sortNotes(); noteConflict();
     }
     flushAgain=true;
-  }
+  }else flushAgain=true;
   saveLocal();
 }
 
@@ -848,7 +944,7 @@ function touch(){ const a=cur(); if(a) a.updated=Date.now(); queueSave(); }
 
 /* 1件ずつ既定値を補う（端末のデータにも、クラウドから届いたデータにも使う） */
 function fillArticle(a){
-  if(a.body===undefined) a.body='';
+  if(a.body==null) a.body='';
   if(!Array.isArray(a.tags)) a.tags=[];
   if(a.status!=='draft' && a.status!=='published') a.status='draft';
   if(typeof a.category!=='string') a.category='';
@@ -861,8 +957,9 @@ function fillNote(n){
     n.memo=[n.phrase,n.points,n.memo].filter(v=>v&&v.trim()).join('\n\n');
     delete n.phrase; delete n.points;
   }
-  if(n.memo===undefined) n.memo='';
-  if(n.think===undefined) n.think='';
+  if(n.text==null) n.text='';
+  if(n.memo==null) n.memo='';
+  if(n.think==null) n.think='';
   if(n.doneAt===undefined) n.doneAt=null;
   return n;
 }
@@ -1588,11 +1685,38 @@ $('dlBtn').addEventListener('click',()=>{
   $('bkMsg').textContent='書き出しました：'+name;
 });
 $('cpBkBtn').addEventListener('click',()=>copyText(dump(),$('cpBkBtn'),'📋 中身をコピー'));
+/* 復元する前に中身を確かめる。問題があれば、今の内容は置き換えずに理由を返す */
+function checkBackup(data){
+  const bad=[], seen=new Set();
+  const isObj=v=>v && typeof v==='object' && !Array.isArray(v);
+  const str=v=>v===undefined || v===null || typeof v==='string';
+  const num=v=>v===undefined || v===null || (typeof v==='number' && isFinite(v));
+  /* Firebase の保存場所の名前に使えない文字（. # $ [ ] / と制御文字）を含むIDは受け付けない */
+  const okId=id=>typeof id==='string' && id.length>0 && id.length<=200 && !/[.#$\[\]\/\x00-\x1f\x7f]/.test(id);
+  const check=(list,label,strs,nums)=>list.forEach((x,i)=>{
+    const at=`${label}${i+1}件目`;
+    if(!isObj(x)){ bad.push(at+'の形式が違います'); return; }
+    if(!okId(x.id)) bad.push(at+'のIDが無いか、使えない文字を含みます');
+    else if(seen.has(x.id)) bad.push(at+'のIDが他と重なっています');
+    else seen.add(x.id);
+    strs.forEach(f=>{ if(!str(x[f])) bad.push(`${at}の「${f}」が文字ではありません`); });
+    nums.forEach(f=>{ if(!num(x[f])) bad.push(`${at}の「${f}」が日時・数値ではありません`); });
+    if(x.tags!==undefined && x.tags!==null && !(Array.isArray(x.tags) && x.tags.every(t=>typeof t==='string'))) bad.push(at+'のタグの形式が違います');
+  });
+  check(data.articles,'記事',['title','body','category','status'],['created','updated','deletedAt','publishedAt']);
+  check(data.notes,'ネタ',['text','memo','think'],['doneAt','order']);
+  return bad;
+}
 async function restore(text){
   let data;
   try{ data=JSON.parse(text); }catch(e){ $('bkMsg').textContent='読み取れませんでした（形式が違います）'; return; }
   if(!data || !Array.isArray(data.articles) || !Array.isArray(data.notes)){
     $('bkMsg').textContent='このファイルは下書き帳のバックアップではないようです'; return;
+  }
+  const bad=checkBackup(data);
+  if(bad.length){
+    $('bkMsg').textContent='復元しませんでした。内容に問題があります：'+bad.slice(0,3).join('／')+(bad.length>3?`　ほか${bad.length-3}件`:'');
+    return;
   }
   if(!await ask(`記事 ${data.articles.length}件 / ネタ ${data.notes.length}件 で置き換えます。今の内容は消えます。`)) return;
   articles=data.articles; notes=data.notes; curId=null; open.clear();
@@ -1636,14 +1760,15 @@ $('cfgLink').addEventListener('click',()=>{
   let last=null;
   try{ last=localStorage.getItem(LAST_OWNER); }catch(e){}
   const who = last && last!=='local' ? last : null;
+  if(who) setV1Owner(who);   /* 新しい形式を使っていた端末では、旧形式の端末データはこのアカウントのもの */
   const d=loadLocal(who);
-  if(d){ owner=who; useData(d); }
+  if(d){ owner=who; useData(d); takeBoot(false); }
   else{
     let v1=null;
     try{ const raw=localStorage.getItem(LOCAL_V1); v1=raw?JSON.parse(raw):null; }catch(e){}
     if(v1) useData({articles:v1.articles, notes:v1.notes, theme:v1.theme});
+    takeBoot(!!v1);
   }
-  articles.forEach(a=>bootIds.add('a:'+a.id)); notes.forEach(n=>bootIds.add('n:'+n.id));
 }
 renderList(); renderNotes(); showSaved();
 initCloud();
@@ -1657,10 +1782,16 @@ window.addEventListener('online',async()=>{
   await initCloud();
   if(cloud.ready) return;
   /* ブラウザは一度失敗した読み込みを覚えていて、同じページでは再試行できない。
-     書いた内容は端末に保存済みなので、ページを読み込み直して接続する（編集中なら一覧に戻るのを待つ） */
-  if(!curId){ saveLocal(); location.reload(); return; }
-  warn('ネットにつながりました。一覧に戻ると同期を始めます。');
-  const wait=setInterval(()=>{ if(!curId){ clearInterval(wait); saveLocal(); location.reload(); } },1000);
+     書いた内容を端末に保存できたら、ページを読み込み直して接続する。
+     記事の編集中や、ネタ・バックアップの入力欄に書きかけがあるときは、それが終わるのを待つ */
+  const busy=()=>curId || ['noteInput','pasteBox'].some(id=>$(id) && $(id).value.trim());
+  const go=()=>{
+    if(!saveLocal()){ warn('ネットにつながりましたが、この端末に保存できないため、読み込み直さずにこのままにします。「💾 バックアップ・復元」から書き出してください。'); return; }
+    location.reload();
+  };
+  if(!busy()){ go(); return; }
+  warn('ネットにつながりました。記事を閉じ、書きかけの入力を済ませると同期を始めます。');
+  const wait=setInterval(()=>{ if(!busy()){ clearInterval(wait); go(); } },1000);
 });
 
 if('serviceWorker' in navigator){
