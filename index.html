@@ -502,34 +502,100 @@ function applyTheme(t){
   $('themeBtn').textContent = t==='dark' ? '☾' : '☀';
 }
 applyTheme(matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light');
-$('themeBtn').addEventListener('click',()=>{ applyTheme(theme==='dark'?'light':'dark'); queueSave(); });
+$('themeBtn').addEventListener('click',()=>{
+  applyTheme(theme==='dark'?'light':'dark'); saveLocal();
+  if(cloud.user && initialSynced){ const f=cloud.fns; f.set(f.ref(cloud.db,V2_ROOT(owner)+'/meta/theme'),theme).catch(()=>{}); }
+});
 
 /* ===== 保存先（Firebase） ===== */
-const cloud={ready:false, user:null, db:null, ref:null, fns:null};
-let pulledFor=null;
+const cloud={ready:false, user:null, db:null, fns:null, connected:false};
 
-/* ===== ローカルキャッシュ（オフライン対策） ===== */
-const LOCAL_KEY='shitagaki-local-v1';
-function loadLocal(){
-  try{
-    const raw=localStorage.getItem(LOCAL_KEY);
-    return raw ? JSON.parse(raw) : null;
-  }catch(e){ return null; }
+/* ===== 同期のしくみ =====
+   ・記事とネタは1件ずつ users/<uid>/shitagaki2/{articles|notes}/<id> に保存する（他の項目を巻き込んで上書きしない）
+   ・開いている間は、他の端末の変更をリアルタイムで受け取る
+   ・synced[key] に「最後にクラウドと一致していた版(rev)と中身の指紋(h)」を持ち、指紋が変わった項目だけを送る（時刻は比べない）
+   ・送るときは rev を比べるトランザクションにする。他の端末が先に変えていたら、こちらの内容を元の場所に、
+     向こうの内容を「（別の端末の版）」として複製し、両方残す
+   ・クラウドの最初の内容を受け取るまでは送らない
+   ・端末にも同じ内容と synced を保存し、オフラインで閉じても次に開いたときに送れるようにする */
+const V2_ROOT=u=>'users/'+u+'/shitagaki2';
+const V1_PATH=u=>'users/'+u+'/shitagaki';
+const LOCAL_V1='shitagaki-local-v1';   // 旧形式。移行の元データとして読むだけ
+const LOCAL_V2='shitagaki-v2:';         // + uid（未ログインは 'local'）
+const LAST_OWNER='shitagaki-v2-last';
+let owner=null;            // 表示中のデータの持ち主(uid)。未ログインで使っているときは null
+let synced={};             // 'a:ID' / 'n:ID' -> {rev, h}
+let initialSynced=false;   // 今の持ち主について、クラウドの最初の内容を受け取ったか
+let syncFor=null;          // 同期を始めた uid（ログイン状態の通知が何度来ても始め直さない）
+let unsubs=[];
+let flushPromise=null, flushAgain=false;
+let noteDragging=false;
+const bootIds=new Set();   // 起動時に端末にあった項目（移行のとき、起動後に作った項目だけを残すため）
+
+function norm(o){
+  const r={};
+  Object.keys(o).sort().forEach(k=>{
+    if(k==='rev') return;
+    const v=o[k];
+    /* Firebase は null と空の配列を保存しないので、比べるときも同じにそろえる */
+    if(v===null||v===undefined||(Array.isArray(v)&&!v.length)) return;
+    r[k]=v;
+  });
+  return r;
+}
+function fingerprint(o){
+  const s=JSON.stringify(norm(o));
+  let h1=0xdeadbeef^s.length, h2=0x41c6ce57^s.length;
+  for(let i=0;i<s.length;i++){ const c=s.charCodeAt(i); h1=Math.imul(h1^c,2654435761); h2=Math.imul(h2^c,1597334677); }
+  h1=Math.imul(h1^(h1>>>16),2246822507)^Math.imul(h2^(h2>>>13),3266489909);
+  h2=Math.imul(h2^(h2>>>16),2246822507)^Math.imul(h1^(h1>>>13),3266489909);
+  return (h2>>>0).toString(36)+'.'+(h1>>>0).toString(36);
+}
+const listOf=k=>k==='a'?articles:notes;
+const pathOf=k=>k==='a'?'articles':'notes';
+const fill=(k,o)=>k==='a'?fillArticle(o):fillNote(o);
+
+function warn(msg){
+  const bar=$('warnBar');
+  if(msg){ bar.textContent=msg; bar.classList.add('on'); } else bar.classList.remove('on');
+}
+function setCloudStatus(t){ $('cloudStatus').textContent=t; }
+
+function loadLocal(o){
+  try{ const raw=localStorage.getItem(LOCAL_V2+(o||'local')); return raw?JSON.parse(raw):null; }catch(e){ return null; }
 }
 function saveLocal(){
   try{
-    localStorage.setItem(LOCAL_KEY, JSON.stringify({articles, notes, theme, updated: Date.now()}));
+    localStorage.setItem(LOCAL_V2+(owner||'local'), JSON.stringify({articles, notes, theme, synced}));
+    localStorage.setItem(LAST_OWNER, owner||'local');
     return true;
   }catch(e){
     warn('この端末に保存できませんでした（容量不足など）。ネットにつながっていない間の変更は、画面を閉じると消える可能性があります。「💾 バックアップ・復元」から書き出してください。');
     return false;
   }
 }
-function warn(msg){
-  const bar=$('warnBar');
-  if(msg){ bar.textContent=msg; bar.classList.add('on'); } else bar.classList.remove('on');
+function useData(d){
+  articles=Array.isArray(d&&d.articles)?d.articles:[];
+  notes=Array.isArray(d&&d.notes)?d.notes:[];
+  synced=(d&&d.synced)||{};
+  if(d&&d.theme) applyTheme(d.theme);
+  migrate();
 }
-function setCloudStatus(t){ $('cloudStatus').textContent=t; }
+function pendingChanges(){
+  const out=[];
+  for(const k of ['a','n']){
+    const list=listOf(k), ids=new Set(list.map(x=>x.id));
+    for(const it of list){ const key=k+':'+it.id; if(!synced[key]||synced[key].h!==fingerprint(it)) out.push({k,key,id:it.id}); }
+    for(const key of Object.keys(synced)) if(key[0]===k && !ids.has(key.slice(2))) out.push({k,key,id:key.slice(2),remove:true});
+  }
+  return out;
+}
+function showSaved(){
+  const n=pendingChanges().length;
+  if(!cloud.user){ $('savedNote').textContent = n ? '✓ 端末に保存' : ''; return; }
+  if(n && (!cloud.connected || !initialSynced)){ $('savedNote').textContent='✓ 端末に保存（未送信 '+n+'件）'; return; }
+  if(!n){ const t=new Date(); $('savedNote').textContent='✓ 保存 '+String(t.getHours()).padStart(2,'0')+':'+String(t.getMinutes()).padStart(2,'0'); }
+}
 
 let activeConfig = configFromUrl() || FIREBASE_CONFIG;
 let cloudIniting=false;
@@ -557,18 +623,16 @@ async function initCloudInner(){
     cloud.ready=true;
     $('authBtn').hidden=false;
 
-    auth.onAuthStateChanged(authObj, async u=>{
+    auth.onAuthStateChanged(authObj, u=>{
       cloud.user=u||null;
       if(u){
         $('authBtn').textContent='ログアウト';
-        cloud.ref=db.ref(cloud.db,'users/'+u.uid+'/shitagaki');
         setCloudStatus('Firebaseに保存中（'+(u.displayName||u.email||'ログイン済み')+'）');
         warn('');
-        if(pulledFor!==u.uid){ pulledFor=u.uid; await pull(); }
+        if(syncFor!==u.uid){ syncFor=u.uid; startSync(u.uid); }
       }else{
-        pulledFor=null;
+        syncFor=null; stopSync();
         $('authBtn').textContent='ログイン';
-        cloud.ref=null;
         setCloudStatus('未ログイン。ログインすると保存されます。');
         warn('未ログインです。ヘッダーの「ログイン」を押すと、書いた内容が保存されるようになります。');
       }
@@ -589,72 +653,254 @@ $('authBtn').addEventListener('click',async()=>{
   }catch(e){ warn('ログインできませんでした（'+(e.message||e)+'）'); }
 });
 
-async function pull(){
-  try{
-    const snap=await cloud.fns.get(cloud.ref);
-    const d=snap.exists()?snap.val():null;
-    const local=loadLocal();
-    if(local && (local.updated||0) > (d&&d.updated||0)){
-      /* オフライン中などに、クラウドへまだ届いていないローカルの変更が残っている場合はそちらを優先する */
-      articles=Array.isArray(local.articles)?local.articles:[];
-      notes=Array.isArray(local.notes)?local.notes:[];
-      if(local.theme) applyTheme(local.theme);
-      migrate(); renderList(); renderNotes();
-      $('savedNote').textContent='✓ 端末に残っていた変更を復元しました';
-      await save();
-    }else if(d){
-      articles=Array.isArray(d.articles)?d.articles:[];
-      notes=Array.isArray(d.notes)?d.notes:[];
-      if(d.theme) applyTheme(d.theme);
-      migrate(); renderList(); renderNotes();
-      $('savedNote').textContent='✓ 読み込み済み';
-      saveLocal();
-    }else if(articles.length||notes.length){
-      save();
-    }
-  }catch(e){ warn('読み込めませんでした（'+(e.message||e)+'）'); }
+function stopSync(){
+  unsubs.forEach(fn=>{ try{ fn(); }catch(e){} });
+  unsubs=[]; initialSynced=false; cloud.connected=false;
 }
+function startSync(u){
+  stopSync();
+  const f=cloud.fns;
+  if(owner!==u){
+    const d=loadLocal(u);
+    if(d) useData(d);
+    else if(owner!==null) useData(null);   /* 別のアカウントのデータは引き継がない */
+    /* owner が null（未ログインで使っていた／旧形式から移行）のときは、今の内容を未送信として持ち込む */
+    owner=u; saveLocal();
+    renderAll();
+  }
+  let busy=false, has=false, latest=null;
+  const pump=async()=>{
+    if(busy) return; busy=true;
+    try{
+      while(has){
+        const S=latest; has=false;
+        if(!initialSynced){
+          if(!(S && S.meta && S.meta.migratedAt)) await migrateFromV1(u, S);
+          else applySnapshot(S);
+          initialSynced=true;
+          flush();
+        }else applySnapshot(S);
+      }
+    }catch(e){ warn('同期できませんでした（'+(e.message||e)+'）。この端末には保存されています。'); }
+    finally{ busy=false; }
+  };
+  unsubs.push(f.onValue(f.ref(cloud.db,'.info/connected'), s=>{
+    cloud.connected=!!s.val();
+    if(cloud.connected) flush(); else showSaved();
+  }));
+  unsubs.push(f.onValue(f.ref(cloud.db,V2_ROOT(u)), s=>{ latest=s.val(); has=true; pump(); },
+    e=>warn('クラウドから読み込めませんでした（'+(e.message||e)+'）')));
+}
+
+/* 旧形式（記事一覧まるごと1か所）から、1件ずつの形式へ写す。旧データは消さずに残す */
+async function migrateFromV1(u, S){
+  const f=cloud.fns;
+  if(S && (S.articles||S.notes)){   /* 別の端末が移行を済ませかけている */
+    applySnapshot(S);
+    await f.update(f.ref(cloud.db,V2_ROOT(u)+'/meta'),{migratedAt:Date.now()});
+    return;
+  }
+  let old=null, v1=null;
+  const snap=await f.get(f.ref(cloud.db,V1_PATH(u)));
+  old=snap.exists()?snap.val():null;
+  try{ const raw=localStorage.getItem(LOCAL_V1); v1=raw?JSON.parse(raw):null; }catch(e){}
+  /* 旧版でクラウドに届いていなかった端末の変更があれば、そちらを元にする（旧版と同じ判断） */
+  const base = (v1 && (v1.updated||0) > ((old&&old.updated)||0)) ? v1 : old;
+  if(base){
+    const fresh=[...articles.filter(a=>!bootIds.has('a:'+a.id))], freshN=[...notes.filter(n=>!bootIds.has('n:'+n.id))];
+    articles=Array.isArray(base.articles)?base.articles.filter(Boolean):[];
+    notes=Array.isArray(base.notes)?base.notes.filter(Boolean):[];
+    notes.forEach((n,i)=>{ if(typeof n.order!=='number') n.order=i; });
+    /* 起動してから移行が終わるまでに作ったものは残す */
+    fresh.forEach(a=>{ if(!articles.some(x=>x.id===a.id)) articles.push(a); });
+    freshN.forEach(n=>{ if(!notes.some(x=>x.id===n.id)) notes.push(n); });
+    if(base.theme) applyTheme(base.theme);
+  }
+  migrate();
+  const upd={'meta/migratedAt':Date.now(),'meta/theme':theme};
+  articles.forEach(a=>{ upd['articles/'+a.id]={...norm(a),rev:1}; });
+  notes.forEach(n=>{ upd['notes/'+n.id]={...norm(n),rev:1}; });
+  await f.update(f.ref(cloud.db,V2_ROOT(u)), upd);
+  synced={};
+  articles.forEach(a=>{ a.rev=1; synced['a:'+a.id]={rev:1,h:fingerprint(a)}; });
+  notes.forEach(n=>{ n.rev=1; synced['n:'+n.id]={rev:1,h:fingerprint(n)}; });
+  saveLocal(); renderAll();
+  if(curId){ if(cur()) refreshOpenArticle(); else goList(); }
+}
+
+/* クラウドの最新の内容を取り込む。この端末で変えていない項目だけを置き換える */
+function applySnapshot(S){
+  const srv={a:(S&&S.articles)||{}, n:(S&&S.notes)||{}};
+  let aChanged=false, nChanged=false, openChanged=false, openRemoved=false;
+  for(const k of ['a','n']){
+    const list=listOf(k), byId=new Map(list.map(x=>[x.id,x]));
+    for(const id of Object.keys(srv[k])){
+      const key=k+':'+id, sRev=srv[k][id].rev||0, s=fill(k,{...srv[k][id], id}), sh=fingerprint(s);
+      const loc=byId.get(id);
+      if(!loc){
+        if(synced[key]) continue;          /* この端末で完全削除して送信待ち。送るときに判断する */
+        list.push({...s, rev:sRev}); synced[key]={rev:sRev,h:sh};
+        if(k==='a') aChanged=true; else nChanged=true;
+        continue;
+      }
+      const lh=fingerprint(loc);
+      if(lh===sh){ synced[key]={rev:sRev,h:sh}; loc.rev=sRev; continue; }
+      if(synced[key] && synced[key].h===lh){   /* この端末では変えていない → 向こうの内容にする */
+        list[list.indexOf(loc)]={...s, rev:sRev}; synced[key]={rev:sRev,h:sh};
+        if(k==='a'){ aChanged=true; if(id===curId) openChanged=true; } else nChanged=true;
+      }
+      /* 両方で変わっている → こちらを残す。送るときに rev を比べて両方残す */
+    }
+    for(const loc of [...list]){
+      const key=k+':'+loc.id;
+      if(Object.prototype.hasOwnProperty.call(srv[k],loc.id)) continue;
+      if(synced[key] && synced[key].h===fingerprint(loc)){   /* 他の端末で完全に削除された */
+        list.splice(list.indexOf(loc),1); delete synced[key];
+        if(k==='a'){ aChanged=true; if(loc.id===curId) openRemoved=true; } else nChanged=true;
+      }
+    }
+  }
+  if(S && S.meta && S.meta.theme && S.meta.theme!==theme) applyTheme(S.meta.theme);
+  sortNotes();
+  saveLocal();
+  if(aChanged){ renderList(); if(!$('viewTrash').hidden) renderTrash(); }
+  if(nChanged && !noteDragging) renderNotesKeepFocus();
+  if(openRemoved){ goList(); warn('開いていた記事は、別の端末で完全に削除されました。'); }
+  else if(openChanged) refreshOpenArticle();
+  showSaved();
+}
+
+function conflictCopy(k,s){
+  const c={...s, id:uid(k)};
+  delete c.rev;
+  if(k==='a') c.title=(s.title||'無題の記事')+'（別の端末の版）';
+  else c.text=(s.text||'')+'（別の端末の版）';
+  return c;
+}
+function noteConflict(){
+  warn('同じ記事やネタが別の端末でも変更されていたため、両方を残しました。「（別の端末の版）」が付いたものを確認してください。');
+  renderAll();
+}
+
+/* 変わった項目を1件ずつクラウドへ送る */
+function flush(){
+  if(!cloud.user || !initialSynced || !cloud.connected){ showSaved(); return Promise.resolve(); }
+  if(flushPromise){ flushAgain=true; return flushPromise; }
+  const p=(async()=>{
+    try{
+      do{
+        flushAgain=false;
+        for(const t of pendingChanges()) await pushOne(t);
+      }while(flushAgain);
+      showSaved();
+    }catch(e){
+      $('savedNote').textContent='保存できません';
+      warn('クラウドに保存できませんでした（'+(e.message||e)+'）。この端末には保存されています。');
+    }
+  })();
+  /* 送るものがないと上の処理は即座に終わるので、「送信中」の印は必ず付けてから外す */
+  flushPromise=p;
+  p.then(()=>{ if(flushPromise===p){ flushPromise=null; if(flushAgain) flush(); } });
+  return p;
+}
+async function pushOne(t){
+  const f=cloud.fns, r=f.ref(cloud.db, V2_ROOT(owner)+'/'+pathOf(t.k)+'/'+t.id);
+  const base=synced[t.key]?synced[t.key].rev:0;
+  if(t.remove){
+    const res=await f.runTransaction(r, c=>{ if(c===null) return null; if((c.rev||0)!==base) return; return null; }, {applyLocally:false});
+    if(res.committed){ delete synced[t.key]; }
+    else{   /* 削除する前に別の端末で変更されていた → 消さずに向こうの内容を戻す */
+      const sv=res.snapshot.val();
+      if(sv){ const s=fill(t.k,{...sv,id:t.id}); listOf(t.k).push({...s,rev:sv.rev||0}); synced[t.key]={rev:sv.rev||0,h:fingerprint(s)}; sortNotes(); noteConflict(); }
+    }
+    saveLocal();
+    return;
+  }
+  const item=listOf(t.k).find(x=>x.id===t.id); if(!item) return;
+  const sent=norm(item), h=fingerprint(item);
+  const res=await f.runTransaction(r, c=>{
+    if(c && (c.rev||0)!==base) return;   /* 別の端末が先に変えていた */
+    return {...sent, rev:base+1};
+  }, {applyLocally:false});
+  if(res.committed){
+    synced[t.key]={rev:base+1,h};
+    const now=listOf(t.k).find(x=>x.id===t.id); if(now) now.rev=base+1;
+  }else{
+    const sv=res.snapshot.val();
+    if(sv){
+      const s=fill(t.k,{...sv,id:t.id});
+      listOf(t.k).push(conflictCopy(t.k,s));
+      synced[t.key]={rev:sv.rev||0,h:fingerprint(s)};   /* 次は向こうの版を土台に、こちらの内容を送る */
+      sortNotes(); noteConflict();
+    }
+    flushAgain=true;
+  }
+  saveLocal();
+}
+
 function queueSave(){
   saveLocal();
   clearTimeout(saveTimer);
-  if(cloud.ready && cloud.user) $('savedNote').textContent='…';
-  saveTimer=setTimeout(()=>save(),1200);
-}
-async function save(){
-  if(!cloud.ready || !cloud.user) return;
-  try{
-    await cloud.fns.set(cloud.ref,{articles,notes,theme,updated:Date.now()});
-    const t=new Date();
-    $('savedNote').textContent='✓ 保存 '+String(t.getHours()).padStart(2,'0')+':'+String(t.getMinutes()).padStart(2,'0');
-  }catch(e){
-    $('savedNote').textContent='保存できません';
-    warn('保存できませんでした（'+(e.message||e)+'）');
-  }
+  $('savedNote').textContent='…';
+  saveTimer=setTimeout(()=>flush(),1200);
 }
 function touch(){ const a=cur(); if(a) a.updated=Date.now(); queueSave(); }
 
+/* 1件ずつ既定値を補う（端末のデータにも、クラウドから届いたデータにも使う） */
+function fillArticle(a){
+  if(a.body===undefined) a.body='';
+  if(!Array.isArray(a.tags)) a.tags=[];
+  if(a.status!=='draft' && a.status!=='published') a.status='draft';
+  if(typeof a.category!=='string') a.category='';
+  if(a.deletedAt===undefined) a.deletedAt=null;
+  if(a.publishedAt===undefined) a.publishedAt=null;
+  return a;
+}
+function fillNote(n){
+  if(n.phrase!==undefined||n.points!==undefined){
+    n.memo=[n.phrase,n.points,n.memo].filter(v=>v&&v.trim()).join('\n\n');
+    delete n.phrase; delete n.points;
+  }
+  if(n.memo===undefined) n.memo='';
+  if(n.think===undefined) n.think='';
+  if(n.doneAt===undefined) n.doneAt=null;
+  return n;
+}
+/* ネタの並び順は order の小さい順（画面では新しい＝大きい順に表示） */
+function sortNotes(){ notes.sort((a,b)=>(a.order||0)-(b.order||0)); }
 function migrate(){
+  articles=articles.filter(a=>a && typeof a==='object');
+  notes=notes.filter(n=>n && typeof n==='object');
   articles.forEach(a=>{
-    if(a.body===undefined) a.body='';
-    if(!Array.isArray(a.tags)) a.tags=[];
-    if(a.status!=='draft' && a.status!=='published') a.status='draft';
-    if(typeof a.category!=='string') a.category='';
-    if(a.deletedAt===undefined) a.deletedAt=null;
-    if(a.publishedAt===undefined) a.publishedAt=null;
+    fillArticle(a);
     if(Array.isArray(a.phrases)){
       a.phrases.forEach(p=>{ if(p.text) notes.push({id:uid('n'),text:p.text,memo:p.text,think:''}); });
       delete a.phrases;
     }
   });
-  notes.forEach(n=>{
-    if(n.phrase!==undefined||n.points!==undefined){
-      n.memo=[n.phrase,n.points,n.memo].filter(v=>v&&v.trim()).join('\n\n');
-      delete n.phrase; delete n.points;
-    }
-    if(n.memo===undefined) n.memo='';
-    if(n.think===undefined) n.think='';
-    if(n.doneAt===undefined) n.doneAt=null;
-  });
+  notes.forEach((n,i)=>{ fillNote(n); if(typeof n.order!=='number') n.order=i; });
+  sortNotes();
+}
+function renderAll(){ renderList(); if(!$('viewTrash').hidden) renderTrash(); if(!noteDragging) renderNotesKeepFocus(); }
+/* ネタ帳を描き直しても、入力中の欄のカーソルを保つ */
+function renderNotesKeepFocus(){
+  const ae=document.activeElement, li=ae && ae.closest && ae.closest('#noteList .note');
+  if(!(li && ae.dataset && ae.dataset.field)){ renderNotes(); return; }
+  const id=li.dataset.id, fld=ae.dataset.field, s=ae.selectionStart, e=ae.selectionEnd;
+  renderNotes();
+  const t=$('noteList').querySelector(`.note[data-id="${CSS.escape(id)}"] textarea[data-field="${fld}"]`);
+  if(t){ t.focus(); t.setSelectionRange(s,e); }
+}
+/* 開いている記事が別の端末で変わったとき、編集欄を新しい内容にする */
+function refreshOpenArticle(){
+  const a=cur(); if(!a) return;
+  const ta=$('bodyText'), focused=document.activeElement===ta, s=ta.selectionStart, e=ta.selectionEnd;
+  $('titleInput').value=a.title||'';
+  if(ta.value!==a.body){ ta.value=a.body; if(focused) ta.setSelectionRange(Math.min(s,a.body.length),Math.min(e,a.body.length)); }
+  $('tagInput').value=(a.tags||[]).join(', ');
+  $('categoryInput').value=a.category||'';
+  setStatusToggle(a.status||'draft');
+  updateStats();
 }
 
 /* ===== 一覧 ===== */
@@ -872,7 +1118,7 @@ function openArticle(id){
 function saveNow(){
   saveLocal();
   clearTimeout(saveTimer);
-  return save();
+  return flush();
 }
 /* 画面を移る前の保存。端末には必ず保存し、クラウドは最大2.5秒だけ待つ
    （オフラインだとクラウドの完了は通信が戻るまで来ないため、待ち続けない） */
@@ -1170,7 +1416,7 @@ function renderNotes(){
 function autoGrow(el){ el.style.height='76px'; el.style.height=Math.min(el.scrollHeight,240)+'px'; }
 function addNote(){
   const el=$('noteInput'), v=el.value.trim(); if(!v) return;
-  const n={id:uid('n'),text:v,memo:'',think:'',doneAt:null};
+  const n={id:uid('n'),text:v,memo:'',think:'',doneAt:null,order:notes.reduce((m,x)=>Math.max(m,x.order||0),0)+1};
   notes.push(n); open.add(n.id); el.value=''; autoGrow(el);
   openFields.add(n.id+':think'); pendingFocus=n.id+':think';
   renderNotes(); queueSave();
@@ -1218,6 +1464,7 @@ $('doneToggle').addEventListener('click',()=>{ showDone=!showDone; renderNotes()
       startY:e.clientY, lastY:e.clientY, sc, startScroll:sc.scrollTop};
     items.forEach(el=>el.classList.add('sorting'));
     li.classList.add('dragging'); document.body.style.userSelect='none';
+    noteDragging=true;
     drag.raf=requestAnimationFrame(autoScroll);
   });
   list.addEventListener('pointermove',e=>{
@@ -1228,13 +1475,17 @@ $('doneToggle').addEventListener('click',()=>{ showDone=!showDone; renderNotes()
     if(!drag) return;
     const {from,to,items}=drag;
     cancelAnimationFrame(drag.raf);
-    document.body.style.userSelect=''; drag=null;
+    document.body.style.userSelect=''; drag=null; noteDragging=false;
     if(to!==from){
-      /* 画面は新しい順（配列の逆順）なので、並べた順を逆にして配列に戻す */
+      /* 画面は新しい順（order の大きい順）なので、並べた順を逆にして order を振り直す。
+         ドラッグ中に別の端末から届いたネタは一番上（新しい側）に置く */
       const byId=new Map(notes.map(n=>[n.id,n]));
       const shown=items.map(el=>byId.get(el.dataset.id));
       const [moved]=shown.splice(from,1); shown.splice(to,0,moved);
-      notes=[...shown.reverse(), ...notes.filter(n=>n.doneAt)];
+      const ordered=shown.filter(Boolean).reverse();
+      const rest=notes.filter(n=>!n.doneAt && !ordered.includes(n));
+      [...ordered, ...rest].forEach((n,i)=>{ n.order=i; });
+      sortNotes();
       queueSave();
     }
     renderNotes();
@@ -1380,14 +1631,21 @@ $('cfgLink').addEventListener('click',()=>{
   $('cfgMsg').textContent='URLをコピーしました。ブックマークしてください。';
 });
 
-const startupLocal=loadLocal();
-if(startupLocal){
-  articles=Array.isArray(startupLocal.articles)?startupLocal.articles:[];
-  notes=Array.isArray(startupLocal.notes)?startupLocal.notes:[];
-  if(startupLocal.theme) applyTheme(startupLocal.theme);
-  migrate();
+/* 起動：前回の持ち主の端末データを出す。新しい形式のデータがまだなければ、旧形式の端末データを未送信として出す */
+{
+  let last=null;
+  try{ last=localStorage.getItem(LAST_OWNER); }catch(e){}
+  const who = last && last!=='local' ? last : null;
+  const d=loadLocal(who);
+  if(d){ owner=who; useData(d); }
+  else{
+    let v1=null;
+    try{ const raw=localStorage.getItem(LOCAL_V1); v1=raw?JSON.parse(raw):null; }catch(e){}
+    if(v1) useData({articles:v1.articles, notes:v1.notes, theme:v1.theme});
+  }
+  articles.forEach(a=>bootIds.add('a:'+a.id)); notes.forEach(n=>bootIds.add('n:'+n.id));
 }
-renderList(); renderNotes();
+renderList(); renderNotes(); showSaved();
 initCloud();
 
 window.addEventListener('offline',()=>{
@@ -1395,7 +1653,7 @@ window.addEventListener('offline',()=>{
 });
 window.addEventListener('online',async()=>{
   warn('');
-  if(cloud.ready){ if(cloud.user) save(); return; }
+  if(cloud.ready){ flush(); return; }
   await initCloud();
   if(cloud.ready) return;
   /* ブラウザは一度失敗した読み込みを覚えていて、同じページでは再試行できない。
