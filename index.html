@@ -159,6 +159,11 @@ html[data-theme="dark"] .status-toggle[data-status="published"]{border-color:#3E
 .note{background-color:var(--card);border:1px solid var(--rule);border-radius:2px;margin-bottom:8px}
 .note .head{display:flex;gap:9px;align-items:flex-start;padding:11px 12px;cursor:pointer}
 .note .caret{font-family:var(--mono);font-size:11px;color:var(--ink-soft);margin-top:4px;flex:none;transition:transform .15s}
+.note .grip{flex:none;cursor:grab;touch-action:none;color:var(--ink-soft);font-size:18px;line-height:1;
+      padding:3px 6px;margin:-2px -4px -2px -6px;-webkit-user-select:none;user-select:none}
+.note .grip:hover{color:var(--ink)}
+.note.dragging{border-color:var(--ink-mid);box-shadow:0 4px 14px rgba(10,26,52,.25);position:relative;z-index:2}
+.note.dragging .grip{cursor:grabbing}
 .note.open .caret{transform:rotate(90deg)}
 .note .txt{font-size:15px;font-weight:500;line-height:1.7;word-break:break-word;white-space:pre-wrap}
 .note .peek{font-size:12.5px;color:var(--ink-mid);line-height:1.6;margin-top:5px;
@@ -1102,6 +1107,7 @@ function renderNotes(){
   $('noteList').innerHTML=ordered.map(n=>{
     return `<li class="note ${open.has(n.id)?'open':''} ${n.doneAt?'done':''}" data-id="${n.id}">
       <div class="head" data-toggle>
+        ${n.doneAt?'':'<span class="grip" data-grip title="ドラッグで並び替え">⠿</span>'}
         <span class="caret">▸</span>
         <div>
           <div class="txt">${esc(n.text)}</div>
@@ -1152,6 +1158,45 @@ function addNote(){
 }
 $('noteAdd').addEventListener('click',addNote);
 $('doneToggle').addEventListener('click',()=>{ showDone=!showDone; renderNotes(); });
+
+/* ネタの並び替え（⠿をつかんで上下に動かす。マウス・指の両方） */
+(function(){
+  const list=$('noteList');
+  let drag=null;
+  list.addEventListener('pointerdown',e=>{
+    const g=e.target.closest('[data-grip]'); if(!g) return;
+    e.preventDefault();
+    g.setPointerCapture(e.pointerId);
+    drag={li:g.closest('.note'), moved:false};
+    drag.li.classList.add('dragging'); document.body.style.userSelect='none';
+  });
+  list.addEventListener('pointermove',e=>{
+    if(!drag) return;
+    const sc=list.closest('.body'), r=sc.getBoundingClientRect();
+    if(e.clientY<r.top+40) sc.scrollTop-=12; else if(e.clientY>r.bottom-40) sc.scrollTop+=12;
+    /* つかんでいるネタ自体は動かさず、隣のネタを入れ替える（動かすと指やマウスとのつながりが切れるため） */
+    const mid=el=>{ const b=el.getBoundingClientRect(); return b.top+b.height/2; };
+    const movable=el=>el && el.classList.contains('note') && !el.classList.contains('done');
+    let prev=drag.li.previousElementSibling, next=drag.li.nextElementSibling;
+    while(movable(prev) && e.clientY<mid(prev)){ drag.li.after(prev); drag.moved=true; prev=drag.li.previousElementSibling; }
+    while(movable(next) && e.clientY>mid(next)){ drag.li.before(next); drag.moved=true; next=drag.li.nextElementSibling; }
+  });
+  const endDrag=()=>{
+    if(!drag) return;
+    const moved=drag.moved;
+    drag.li.classList.remove('dragging'); document.body.style.userSelect=''; drag=null;
+    if(moved){
+      /* 画面は新しい順（配列の逆順）なので、並べた順を逆にして配列に戻す */
+      const byId=new Map(notes.map(n=>[n.id,n]));
+      const active=[...list.querySelectorAll('.note:not(.done)')].map(x=>byId.get(x.dataset.id)).reverse();
+      notes=[...active, ...notes.filter(n=>n.doneAt)];
+      queueSave();
+    }
+    renderNotes();
+  };
+  list.addEventListener('pointerup',endDrag);
+  list.addEventListener('pointercancel',endDrag);
+})();
 $('noteList').addEventListener('change',e=>{
   const t=e.target;
   if(t.hasAttribute('data-completedate')){ syncConfirm(t); return; }
@@ -1169,6 +1214,7 @@ $('noteList').addEventListener('input',e=>{
   notes.find(x=>x.id===t.closest('.note').dataset.id)[t.dataset.field]=t.value; queueSave();
 });
 $('noteList').addEventListener('click',e=>{
+  if(e.target.closest('[data-grip]')) return;
   const li=e.target.closest('.note'); if(!li) return;
   const n=notes.find(x=>x.id===li.dataset.id);
   const b=e.target.closest('button');
