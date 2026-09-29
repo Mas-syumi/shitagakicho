@@ -532,7 +532,11 @@ let flushPromise=null, flushAgain=false;
 let noteDragging=false;
 let syncGen=0;             // 同期を始め直すたびに増やす。古い同期の処理が終わっても、今の状態に触れないようにする
 let themeDirty=false;      // テーマを変えて、まだクラウドに送っていない
-const inflight=new Set();  // いまクラウドへ送っている項目
+/* いまクラウドへ送っている項目。key -> {h:送った内容の指紋, base:土台の版, baseG:土台の印, g0:新しく作るときの印}。
+   アプリを閉じても残るよう端末にも保存し、開き直したときにクラウドの内容と照らし合わせる */
+const inflight=new Map();
+const skipped=new Set();   // 送信中だったため、取り込みを後回しにした項目
+let lastS=null;            // 最後に受け取ったクラウドの内容
 /* 起動時（またはアカウントを切り替えたとき）に端末にあった内容の指紋。
    クラウドと初めてそろえるとき、「その後この端末で変えたもの」を見分けるのに使う */
 let boot=new Map(), bootFromV1=false;
@@ -546,8 +550,8 @@ const changedSinceBoot=(k,it)=>touched.has(k+':'+it.id) || boot.get(k+':'+it.id)
 function markTouched(){
   for(const k of ['a','n']) for(const it of listOf(k)){ const key=k+':'+it.id; if(!touched.has(key) && boot.get(key)!==fingerprint(it)) touched.add(key); }
 }
-/* 送信中だった項目（アプリを閉じても残す）。開き直したとき、手元に無ければ「送信中に消した」とみなす */
-let sendingPrev=new Set();
+/* 前回アプリを閉じたときに送信中だった項目（inflight と同じ形）。最初の取り込みで照らし合わせる */
+let sendingPrev=new Map();
 const newGen=()=>Math.random().toString(36).slice(2,10)+Date.now().toString(36);
 function v1Owner(){ try{ return localStorage.getItem(V1_OWNER); }catch(e){ return null; } }
 function setV1Owner(u){ try{ if(!localStorage.getItem(V1_OWNER)) localStorage.setItem(V1_OWNER,u); }catch(e){} }
@@ -588,7 +592,7 @@ function loadLocal(o){
 function saveLocal(){
   if(!initialSynced) markTouched();
   try{
-    localStorage.setItem(LOCAL_V2+(owner||'local'), JSON.stringify({articles, notes, theme, themeDirty, synced, sending:[...inflight, ...sendingPrev]}));
+    localStorage.setItem(LOCAL_V2+(owner||'local'), JSON.stringify({articles, notes, theme, themeDirty, synced, sending:Object.fromEntries([...sendingPrev, ...inflight])}));
     localStorage.setItem(LAST_OWNER, owner||'local');
     return true;
   }catch(e){
@@ -601,7 +605,9 @@ function useData(d){
   notes=Array.isArray(d&&d.notes)?d.notes:[];
   synced=(d&&d.synced)||{};
   themeDirty=!!(d&&d.themeDirty);
-  sendingPrev=new Set((d&&Array.isArray(d.sending))?d.sending:[]);
+  const sd=d&&d.sending;
+  /* 以前の形式（キーだけの配列）は、送った内容が分からないものとして扱う */
+  sendingPrev=new Map(Array.isArray(sd)?sd.map(k=>[k,null]):Object.entries(sd&&typeof sd==='object'?sd:{}));
   if(d&&d.theme) applyTheme(d.theme);
   migrate();
 }
@@ -687,7 +693,7 @@ $('authBtn').addEventListener('click',async()=>{
 function stopSync(){
   unsubs.forEach(fn=>{ try{ fn(); }catch(e){} });
   unsubs=[]; initialSynced=false; cloud.connected=false;
-  syncGen++; flushPromise=null; flushAgain=false; inflight.clear();
+  syncGen++; flushPromise=null; flushAgain=false; inflight.clear(); skipped.clear(); lastS=null;
 }
 function startSync(u){
   stopSync();
@@ -721,7 +727,8 @@ function startSync(u){
         if(!initialSynced){
           const done=S && S.meta && S.meta.migratedAt;
           if(done || (S && (S.articles||S.notes))){
-            if(Object.keys(synced).length) applySnapshot(S); else adoptFirst(S,null);
+            const first=!Object.keys(synced).length, fixed=reconcileSending(S);
+            if(first) adoptFirst(S,null,fixed); else applySnapshot(S);
             if(!done) await f.update(f.ref(cloud.db,V2_ROOT(u)+'/meta'),{migratedAt:Date.now()});
           }
           else if(!await migrateFromV1(u,gen)) continue;
@@ -795,12 +802,13 @@ async function migrateFromV1(u, gen){
      土台はこの端末が移行で送った内容（sentH）か、起動時の内容がクラウドと同じだった場合の、そのクラウドの版。
      分からないときは両方残す（送ると必ず「（別の端末の版）」ができる）
    sentH は、この端末が移行で送った内容の指紋 */
-function adoptFirst(S, sentH){
+function adoptFirst(S, sentH, fixed){
   const srv={a:(S&&S.articles)||{}, n:(S&&S.notes)||{}}, has=(o,id)=>Object.prototype.hasOwnProperty.call(o,id);
   for(const k of ['a','n']){
     const list=listOf(k), ids=new Set(list.map(x=>x.id));
     for(const it of [...list]){
       const key=k+':'+it.id, h=fingerprint(it), b=boot.get(key), sent=sentH?sentH[key]:undefined;
+      if(fixed && fixed.has(key)) continue;   /* 前回送信中だった項目は reconcileSending で決めた */
       if(has(srv[k],it.id)){
         const sv=srv[k][it.id], sh=fingerprint(fill(k,{...sv,id:it.id})), rev=sv.rev||0;
         if(sent!==undefined) synced[key]={rev, h:sent, g:sv.g};                  /* クラウドは、いま送った内容 */
@@ -812,7 +820,7 @@ function adoptFirst(S, sentH){
     }
     for(const [key,b] of boot){                                                  /* この端末で消した */
       const id=key.slice(2);
-      if(key[0]!==k || ids.has(id) || !has(srv[k],id)) continue;
+      if(key[0]!==k || ids.has(id) || !has(srv[k],id) || (fixed && fixed.has(key))) continue;
       const sv=srv[k][id], sent=sentH?sentH[key]:undefined;
       if(sent!==undefined) synced[key]={rev:sv.rev||0, h:sent, g:sv.g};
       else if(fingerprint(fill(k,{...sv,id}))===b) synced[key]={rev:sv.rev||0, h:b, g:sv.g};
@@ -825,24 +833,46 @@ function adoptFirst(S, sentH){
   renderAll();
 }
 
+/* 前回アプリを閉じたとき送信中だった項目を、クラウドの内容と照らし合わせて、同期の基準(synced)を決める。
+   ・クラウドが「送った内容そのもの」 → 自分の送信は届いていた。その版を基準にする（その後の手元の変更は未送信のまま）
+   ・クラウドが「送る前の版」のまま、または項目が無い → 届いていない。基準はそのまま
+   ・それ以外（その後に別の端末が変えた、または送った内容が分からない） → 手元の変更・削除を、送る前の版を土台に送る。
+     クラウドはその版から進んでいるので、送ると必ず両方残る（削除なら、クラウドの内容を戻す）
+   決めた項目のキーを返す */
+function reconcileSending(S){
+  const fixed=new Set();
+  for(const [key,rec] of sendingPrev){
+    const k=key[0], id=key.slice(2), sv=S && S[pathOf(k)] && S[pathOf(k)][id];
+    if(!sv) continue;
+    const rev=sv.rev||0, sh=fingerprint(fill(k,{...sv,id}));
+    if(rec && rev===rec.base+1 && sh===rec.h && (sv.g===rec.baseG || sv.g===rec.g0)) synced[key]={rev, h:rec.h, g:sv.g};
+    else if(rec && rev===rec.base && sv.g===rec.baseG) continue;
+    else synced[key]= rec ? {rev:rec.base, h:'', g:rec.baseG} : {rev:-1, h:'', g:sv.g};
+    fixed.add(key);
+  }
+  return fixed;
+}
+
 /* クラウドの最新の内容を取り込む。この端末で変えていない項目だけを置き換える */
 function applySnapshot(S){
   const srv={a:(S&&S.articles)||{}, n:(S&&S.notes)||{}};
+  lastS=S;
   let aChanged=false, nChanged=false, openChanged=false, openRemoved=false;
   for(const k of ['a','n']){
     const list=listOf(k), byId=new Map(list.map(x=>[x.id,x]));
     for(const id of Object.keys(srv[k])){
       const key=k+':'+id, sRev=srv[k][id].rev||0, s=fill(k,{...srv[k][id], id}), sh=fingerprint(s);
       const loc=byId.get(id);
+      /* 送信中の項目は、送信の結果が出てから取り込み直す（送信中に元の内容へ戻した場合も「変えた」ままにするため） */
+      if(inflight.has(key)){ skipped.add(key); continue; }
+      /* 手元が知っている版より古い通知（同じ作り直しの回で、版番号が小さい）は取り込まない */
+      if(synced[key] && srv[k][id].g===synced[key].g && sRev<synced[key].rev) continue;
       if(!loc){
-        if(synced[key] || inflight.has(key)) continue;   /* この端末で削除して送信待ち・送信中。送るときに判断する */
-        if(sendingPrev.has(key)){ synced[key]={rev:sRev,h:sh,g:srv[k][id].g}; continue; }   /* 送信中に消してアプリを閉じた → 削除を送る */
+        if(synced[key]) continue;   /* この端末で削除して送信待ち。送るときに判断する */
         list.push({...s, rev:sRev}); synced[key]={rev:sRev,h:sh,g:srv[k][id].g};
         if(k==='a') aChanged=true; else nChanged=true;
         continue;
       }
-      /* 送信中の項目は、送信の結果で判断する（送信中に元の内容へ戻した場合も「変えた」ままにするため） */
-      if(inflight.has(key)) continue;
       const lh=fingerprint(loc);
       if(lh===sh){ synced[key]={rev:sRev,h:sh,g:srv[k][id].g}; loc.rev=sRev; loc.g=srv[k][id].g; continue; }
       if(synced[key] && synced[key].h===lh){   /* この端末では変えていない → 向こうの内容にする */
@@ -853,7 +883,8 @@ function applySnapshot(S){
     }
     for(const loc of [...list]){
       const key=k+':'+loc.id;
-      if(Object.prototype.hasOwnProperty.call(srv[k],loc.id) || inflight.has(key)) continue;
+      if(Object.prototype.hasOwnProperty.call(srv[k],loc.id)) continue;
+      if(inflight.has(key)){ skipped.add(key); continue; }
       if(synced[key] && synced[key].h===fingerprint(loc)){   /* 他の端末で完全に削除された */
         list.splice(list.indexOf(loc),1); delete synced[key];
         if(k==='a'){ aChanged=true; if(loc.id===curId) openRemoved=true; } else nChanged=true;
@@ -930,7 +961,7 @@ async function pushOne(t,gen){
   }
   const item=listOf(t.k).find(x=>x.id===t.id); if(!item) return;
   const sent=norm(item), h=fingerprint(item), g0=newGen();
-  inflight.add(t.key); saveLocal();
+  inflight.set(t.key,{h, base, baseG, g0}); saveLocal();
   let res;
   try{
     res=await f.runTransaction(r, c=>{
@@ -965,6 +996,8 @@ async function pushOne(t,gen){
     flushAgain=true;
   }else flushAgain=true;
   saveLocal();
+  /* 送信中に届いて後回しにしたクラウドの内容を、取り込み直す */
+  if(skipped.delete(t.key) && lastS) applySnapshot(lastS);
 }
 
 function queueSave(){
