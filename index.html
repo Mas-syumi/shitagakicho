@@ -843,7 +843,14 @@ function reconcileSending(S){
   const fixed=new Set();
   for(const [key,rec] of sendingPrev){
     const k=key[0], id=key.slice(2), sv=S && S[pathOf(k)] && S[pathOf(k)][id];
-    if(!sv) continue;
+    if(!sv){
+      /* クラウドに無い：届かなかったのか、届いた後で別の端末が消したのかは分からない。
+         手元の内容が送った内容と違えば（送信中に元に戻した場合も含む）、その変更は誰も見ていないので、
+         消さずに未送信のまま残し、新しい項目として送る */
+      const loc=listOf(k).find(x=>x.id===id);
+      if(rec && loc && synced[key] && fingerprint(loc)!==rec.h){ delete synced[key]; fixed.add(key); }
+      continue;
+    }
     const rev=sv.rev||0, sh=fingerprint(fill(k,{...sv,id}));
     if(rec && rev===rec.base+1 && sh===rec.h && (sv.g===rec.baseG || sv.g===rec.g0)) synced[key]={rev, h:rec.h, g:sv.g};
     else if(rec && rev===rec.base && sv.g===rec.baseG) continue;
