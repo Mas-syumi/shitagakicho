@@ -187,6 +187,8 @@ html[data-theme="dark"] .status-toggle[data-status="published"]{border-color:#3E
 .f textarea{width:100%;background-color:var(--paper);border:1px solid var(--rule);border-radius:2px;
       padding:9px 10px;font-family:var(--sans);font-size:14px;line-height:1.8;min-height:130px;resize:vertical}
 .f.closed{margin-bottom:8px}
+/* 主題の欄：中身の量に合わせて高さを変える。iPhoneで拡大されないよう16px */
+.f.title-f textarea{min-height:0;height:46px;resize:none;overflow:hidden;font-size:16px;font-weight:500;line-height:1.6}
 .addf{width:100%;text-align:left;border:1px dashed var(--rule);background:none;border-radius:2px;
       color:var(--ink-soft);font-size:12.5px;padding:9px 10px}
 .addf:hover{color:var(--ink);border-color:var(--ink-mid)}
@@ -1556,6 +1558,10 @@ function renderNotes(){
         </div>
       </div>
       <div class="fields">
+        <div class="f title-f">
+          <div class="flabel"><label>主題</label></div>
+          <textarea data-field="text" rows="1" placeholder="ネタの主題">${esc(n.text)}</textarea>
+        </div>
         ${FIELDS.map(f=>{
           const val=(n[f.k]||'').trim();
           const folded=foldedFields.has(n.id+':'+f.k);
@@ -1581,6 +1587,7 @@ function renderNotes(){
         </div>
       </div>
     </li>`;}).join('');
+  $('noteList').querySelectorAll('.title-f textarea').forEach(fitTitle);
   if(focus){
     const [nid,key]=focus.split(':');
     const li=$('noteList').querySelector(`.note[data-id="${CSS.escape(nid)}"]`);
@@ -1588,6 +1595,7 @@ function renderNotes(){
     if(ta) ta.focus();
   }
 }
+function fitTitle(el){ if(!el.getClientRects().length) return; el.style.height='auto'; el.style.height=el.scrollHeight+2+'px'; }
 function autoGrow(el){ el.style.height='76px'; el.style.height=Math.min(el.scrollHeight,240)+'px'; }
 function addNote(){
   const el=$('noteInput'), v=el.value.trim(); if(!v) return;
@@ -1682,7 +1690,12 @@ $('noteList').addEventListener('input',e=>{
   const t=e.target;
   if(t.hasAttribute('data-completedate')){ syncConfirm(t); return; }
   if(!t.dataset.field) return;
-  notes.find(x=>x.id===t.closest('.note').dataset.id)[t.dataset.field]=t.value; queueSave();
+  notes.find(x=>x.id===t.closest('.note').dataset.id)[t.dataset.field]=t.value;
+  if(t.dataset.field==='text'){   /* 主題を変えたら、見出しもその場で変える */
+    const tx=t.closest('.note').querySelector('.head .txt'); if(tx) tx.textContent=t.value;
+    fitTitle(t);
+  }
+  queueSave();
 });
 $('noteList').addEventListener('click',e=>{
   if(e.target.closest('[data-grip]')) return;
