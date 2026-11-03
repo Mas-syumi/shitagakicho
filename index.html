@@ -187,8 +187,8 @@ html[data-theme="dark"] .status-toggle[data-status="published"]{border-color:#3E
 .f textarea{width:100%;background-color:var(--paper);border:1px solid var(--rule);border-radius:2px;
       padding:9px 10px;font-family:var(--sans);font-size:14px;line-height:1.8;min-height:130px;resize:vertical}
 .f.closed{margin-bottom:8px}
-/* 主題の欄：中身の量に合わせて高さを変える。iPhoneで拡大されないよう16px */
-.f.title-f textarea{min-height:0;height:46px;resize:none;overflow:hidden;font-size:16px;font-weight:500;line-height:1.6}
+/* 主題の欄：ほかの欄と同じ文字の大きさにし、1行ぶんの高さから中身に合わせて広げる */
+.f.title-f textarea{min-height:0;height:40px;resize:none;overflow:hidden;padding:7px 10px;line-height:1.7}
 .addf{width:100%;text-align:left;border:1px dashed var(--rule);background:none;border-radius:2px;
       color:var(--ink-soft);font-size:12.5px;padding:9px 10px}
 .addf:hover{color:var(--ink);border-color:var(--ink-mid)}
