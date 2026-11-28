@@ -630,7 +630,11 @@ function pendingChanges(){
 function showSaved(){
   const n=pendingChanges().length+(themeDirty?1:0);
   if(!cloud.user){ $('savedNote').textContent = n ? '✓ 端末に保存' : ''; return; }
-  if(n && (!cloud.connected || !initialSynced)){ $('savedNote').textContent='✓ 端末に保存（未送信 '+n+'件）'; return; }
+  if(n && (!cloud.connected || !initialSynced)){
+    /* スマホは見出しの横幅が足りず、ボタンが2行目に押し出されるので短くする（端末に保存したことは赤い帯で伝わる） */
+    $('savedNote').textContent = matchMedia('(max-width:600px)').matches ? '✓ 未送信 '+n+'件' : '✓ 端末に保存（未送信 '+n+'件）';
+    return;
+  }
   if(!n){ const t=new Date(); $('savedNote').textContent='✓ 保存 '+String(t.getHours()).padStart(2,'0')+':'+String(t.getMinutes()).padStart(2,'0'); }
 }
 
